@@ -310,7 +310,7 @@ extension Optional {
     }
 }
 
-let all = checks + navigationChecks() + rexChecks() + parkingChecks()
+let all = checks + navigationChecks() + rexChecks() + parkingChecks() + profileChecks()
 var failures = 0
 for (name, run) in all {
     do { try run(); print("PASS \(name)") }

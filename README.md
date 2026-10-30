@@ -53,10 +53,17 @@ takes it off one monitor. Taking a category off its last monitor parks its
 windows and lists it under "Not on a monitor". Spacey leaves it there until you
 add it back, or press its Option-letter to bring it to the monitor you're on.
 
-A **profile** is one monitor arrangement, such as the desk or the laptop alone.
-Spacey keeps one for each set of connected displays and switches as monitors
-come and go. Unplug and the laptop profile takes over; plug back in and every
-category returns to its screen. Name a profile from the menu.
+A **profile** is one monitor arrangement: Work desk, Home desk, Laptop. Spacey
+keeps one for each set of monitors, recognised by the monitors themselves, and
+switches as they come and go, with a short notice naming the profile. Unplug
+and the laptop profile takes over; plug back in and every category returns to
+its screen. A new set of monitors gets a new profile. If its monitors match a
+saved profile's (the same models in the same shapes, like a hot desk), it starts
+as a copy of that one; otherwise categories are spread across the screens.
+
+The top of the Screens tab lists every profile with a small drawing of its
+monitors. Click a name to rename it. From a profile's ⋯ menu you can copy its
+layout onto the monitors connected now, or delete one you no longer use.
 
 ### Apple Intelligence
 

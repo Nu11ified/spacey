@@ -41,6 +41,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     var classifying: Set<UUID> = []
     // Windows on screen after the last pass, to tell a window coming from offscreen.
     var lastShown: Set<UUID> = []
+    // The profile in use, to announce a switch when monitors come or go.
+    var lastProfile: String?
     var lastMinimized: Set<UUID> = []
     let rex = RexBridge()
     let overlays = Overlays()
@@ -303,7 +305,9 @@ final class Controller: NSObject, NSApplicationDelegate {
         if MacDesktop.focusedIsFullscreen() { refresh(); return }
         let displays = displays()
         guard !displays.isEmpty else { return }
+        let known = state.profiles[DesktopState.topologyKey(displays)] != nil
         state.ensureProfile(displays: displays)
+        announceProfile(displays: displays, new: !known)
         var current: [UUID: MacDesktop.Window] = [:]
         var created: [UUID] = []
         for window in MacDesktop.windows() {
@@ -882,6 +886,15 @@ final class Controller: NSObject, NSApplicationDelegate {
         let profile = state.profile(for: displays)
         let model = setup.model
         model.profile = profile?.name ?? ""
+        let currentKey = DesktopState.topologyKey(displays)
+        model.profiles = state.profiles.map { key, saved in
+            Setup.ProfileCard(id: key, name: saved.name, active: key == currentKey,
+                              monitors: (key == currentKey ? displays : saved.displays ?? []).map { display in
+                                  let first = saved.screens[display.id]?.categories.first
+                                  return Setup.ProfileCard.Monitor(frame: display.frame,
+                                                                   color: state.category(first)?.color)
+                              })
+        }.sorted { ($0.active ? 0 : 1, $0.name) < ($1.active ? 0 : 1, $1.name) }
         model.screens = displays.map { display in
             let screen = profile?.screens[display.id]
             return Setup.Screen(id: display.id, name: display.name, frame: display.frame, split: screen?.split ?? true,
@@ -989,9 +1002,22 @@ final class Controller: NSObject, NSApplicationDelegate {
             self.applied.removeAll()
             self.reconcile()
         }
-        actions.renameProfile = { [weak self] name in
-            guard let self, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-            self.state.profiles[DesktopState.topologyKey(self.displays())]?.name = name
+        actions.renameProfile = { [weak self] key, name in
+            let name = name.trimmingCharacters(in: .whitespaces)
+            guard let self, !name.isEmpty else { return }
+            self.state.profiles[key]?.name = name
+            try? self.store.save(self.state)
+            self.refresh()
+        }
+        actions.copyProfile = { [weak self] key in
+            guard let self else { return }
+            self.state.copyProfile(key, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.deleteProfile = { [weak self] key in
+            guard let self else { return }
+            self.state.deleteProfile(key, displays: self.displays())
             try? self.store.save(self.state)
             self.refresh()
         }
@@ -1078,8 +1104,19 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     // MARK: Rex
 
+    // Says which profile took over when the monitors changed, and names a new one so it's easy to rename.
+    func announceProfile(displays: [Display], new: Bool) {
+        let key = DesktopState.topologyKey(displays)
+        defer { lastProfile = key }
+        guard lastProfile != nil, lastProfile != key, let profile = state.profiles[key] else { return }
+        let monitors = displays.count == 1 ? "1 monitor" : "\(displays.count) monitors"
+        overlays.showNotice(new ? "New profile: \(profile.name)" : profile.name,
+                            new ? "\(monitors) · rename it in setup" : "Profile for these \(monitors)")
+    }
+
     func startRex() {
         overlays.onJump = { [weak self] pane in self?.jump(to: pane) }
+        overlays.onNotice = { [weak self] in self?.setup.model.tab = 0; self?.refreshSetup(force: true); self?.setup.open() }
         rex.onChange = { [weak self] change in self?.rexChanged(change) }
         installHotKeyHandler()
         alwaysHotKeys = [(300, 50, UInt32(optionKey)), (301, 50, UInt32(optionKey | shiftKey)), (219, 43, UInt32(optionKey))]

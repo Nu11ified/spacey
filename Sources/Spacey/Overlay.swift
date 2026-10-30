@@ -89,6 +89,8 @@ final class OverlayModel {
 
     var toast: Row?
     var toastShown = false
+    // A plain message, such as the profile Spacey just switched to.
+    var notice: (title: String, detail: String)?
 
     var rows: [Row] { attention + working }
 
@@ -245,7 +247,22 @@ struct ToastView: View {
     var model: OverlayModel
 
     var body: some View {
-        if let row = model.toast {
+        if model.toast == nil, let notice = model.notice {
+            HStack(spacing: 12) {
+                Image(systemName: "display.2").font(.system(size: 16, weight: .semibold)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(notice.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(notice.detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text("⌥,").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .frame(width: 360, height: 58)
+            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            .offset(y: model.toastShown ? 0 : -8)
+            .animation(.easeOut(duration: 0.18), value: model.toastShown)
+        } else if let row = model.toast {
             HStack(spacing: 12) {
                 StateGlyph(pane: row.pane)
                 VStack(alignment: .leading, spacing: 2) {
@@ -269,6 +286,7 @@ struct ToastView: View {
 final class Overlays {
     let model = OverlayModel()
     var onJump: (RexPane) -> Void = { _ in }
+    var onNotice: () -> Void = {}
     private lazy var inbox = makeInbox()
     private lazy var toast = makeToast()
     private var toastTimer: DispatchWorkItem?
@@ -284,9 +302,9 @@ final class Overlays {
 
     private func makeToast() -> GlassPanel {
         let panel = GlassPanel(ToastView(model: model).onTapGesture { [weak self] in
-            guard let self, let row = self.model.toast else { return }
+            guard let self else { return }
             self.dismissToast()
-            self.onJump(row.pane)
+            if let row = self.model.toast { self.onJump(row.pane) } else { self.onNotice() }
         })
         panel.interactive = false
         return panel
@@ -344,9 +362,20 @@ final class Overlays {
         onJump(pane)
     }
 
+    func showNotice(_ title: String, _ detail: String) {
+        guard !inboxVisible, model.toast == nil || !toast.isVisible else { return }
+        model.toast = nil
+        model.notice = (title, detail)
+        present()
+    }
+
     func showToast(_ row: OverlayModel.Row) {
         guard !inboxVisible else { return }
         model.toast = row
+        present()
+    }
+
+    private func present() {
         model.toastShown = false
         toast.place(on: Self.activeScreen) { area, size in
             NSPoint(x: area.maxX - size.width - 14, y: area.maxY - size.height - 10)

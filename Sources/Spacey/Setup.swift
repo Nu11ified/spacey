@@ -24,10 +24,24 @@ final class Setup {
         var workspace: Int
     }
 
+    // A saved profile: one set of monitors and how categories sit on them.
+    struct ProfileCard: Identifiable, Equatable {
+        struct Monitor: Equatable {
+            var frame: Frame
+            // The colour of the first category on it.
+            var color: String?
+        }
+        var id: String
+        var name: String
+        var active: Bool
+        var monitors: [Monitor]
+    }
+
     @MainActor @Observable
     final class Model {
         var tab = 0
         var profile = ""
+        var profiles: [ProfileCard] = []
         var screens: [Screen] = []
         var unplaced: [String] = []
         // "displayID|categoryID" → that area's Option-letter.
@@ -57,7 +71,11 @@ final class Setup {
         var rename: (String, String) -> Void = { _, _ in }
         var addCategory: (String) -> Void = { _ in }
         var remove: (String) -> Void = { _ in }
-        var renameProfile: (String) -> Void = { _ in }
+        // Profile key and new name.
+        var renameProfile: (String, String) -> Void = { _, _ in }
+        // Use that profile's arrangement for the monitors connected now.
+        var copyProfile: (String) -> Void = { _ in }
+        var deleteProfile: (String) -> Void = { _ in }
         var regroup: () -> Void = {}
     }
 
@@ -73,20 +91,29 @@ final class Setup {
         let window = self.window ?? makeWindow()
         self.window = window
         NSApp.activate()
-        if !window.isVisible { window.center() }
+        if !window.isVisible {
+            // Fit the screen the pointer is on; small or portrait screens get a smaller window.
+            let area = Overlays.activeScreen.visibleFrame
+            let size = NSSize(width: min(1120, area.width - 60), height: min(760, area.height - 60))
+            window.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
+                                   width: size.width, height: size.height), display: false)
+        }
         window.makeKeyAndOrderFront(nil)
+        // Don't start with the profile name selected for typing.
+        DispatchQueue.main.async { window.makeFirstResponder(nil) }
     }
 
     func close() { window?.orderOut(nil) }
 
     private func makeWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 720),
-                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Spacey"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.moveToActiveSpace]
+        window.contentMinSize = NSSize(width: 760, height: 520)
         window.contentView = NSHostingView(rootView: SetupView(model: model, actions: { [weak self] in self?.actions ?? Actions() })
             .environment(\.colorScheme, .dark))
         return window
@@ -130,7 +157,7 @@ struct SetupView: View {
                 Text(error).font(.system(size: 11.5)).foregroundStyle(.orange).padding(.bottom, 10)
             }
         }
-        .frame(minWidth: 1120, minHeight: 720)
+        .frame(minWidth: 760, minHeight: 520)
         .background(Color(red: 0.09, green: 0.09, blue: 0.11))
     }
 }
@@ -177,13 +204,12 @@ struct DropHighlight: ViewModifier {
 struct ScreensTab: View {
     var model: Setup.Model
     var actions: Setup.Actions
-    @State private var profileName = ""
     @State private var targeted: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             WindowTray(model: model)
-                .frame(width: 250)
+                .frame(width: 240)
             Divider().opacity(0.5)
             board
         }
@@ -192,23 +218,14 @@ struct ScreensTab: View {
     var board: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 10) {
-                    Text("Profile").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                    TextField("Name", text: $profileName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                        .onSubmit { actions.renameProfile(profileName) }
-                    Text("Saved for this set of monitors. Spacey switches profiles when monitors connect or disconnect.")
-                        .font(.system(size: 11.5)).foregroundStyle(.tertiary)
-                }
-                .onAppear { profileName = model.profile }
-                .onChange(of: model.profile) { profileName = model.profile }
+                ProfileStrip(model: model, actions: actions)
 
                 Arrangement(model: model, actions: actions)
                     .frame(height: 300)
                     .frame(maxWidth: .infinity)
                 Text("Drag a window from the left onto a category on a monitor, or onto one of its workspace numbers. Drag a category onto a monitor to move it there; hold Option to show it there too.")
                     .font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 ForEach(model.screens) { screen in screenRow(screen) }
                 if !model.unplaced.isEmpty { unplacedRow }
@@ -246,37 +263,26 @@ struct ScreensTab: View {
     }
 
     func screenRow(_ screen: Setup.Screen) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(screen.name).font(.system(size: 13, weight: .semibold))
-                Text(screen.frame.height > screen.frame.width ? "Vertical" : "Horizontal")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(screen.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(screen.frame.height > screen.frame.width ? "Vertical" : "Horizontal")
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+                Picker("", selection: Binding(get: { screen.split }, set: { actions.split(screen.id, $0) })) {
+                    Text("Side by side").tag(true)
+                    Text("One at a time").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
-            .frame(width: 170, alignment: .leading)
-            HStack(spacing: 6) {
+            FlowLayout(spacing: 6) {
                 ForEach(screen.categories, id: \.self) { id in
                     if let category = model.categories.first(where: { $0.id == id }) {
-                        HStack(spacing: 2) {
-                            CategoryLabel(category: category)
-                                .draggable("category:\(id)") { CategoryLabel(category: category) }
-                                .dropDestination(for: String.self) { items, _ in actions.drop(items, on: screen.id, before: id) }
-                            Menu {
-                                ForEach(model.screens.filter { $0.id != screen.id }) { other in
-                                    Button("Move to \(other.name)") { actions.place(id, other.id) }
-                                }
-                            } label: {
-                                Image(systemName: "arrow.left.arrow.right")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .menuIndicator(.hidden)
-                            .fixedSize()
-                            .help("Move \(category.name) to another monitor")
-                            let others = model.screens.filter { $0.categories.contains(id) }.count > 1
-                            Button { actions.removeFromScreen(id, screen.id) } label: { Image(systemName: "xmark") }
-                                .buttonStyle(.borderless)
-                                .help(others ? "Take \(category.name) off this monitor. It stays on the others."
-                                             : "Take \(category.name) off this monitor. Its windows wait until you add it back or press Option-\(category.letter.uppercased()).")
-                        }
+                        chip(category, on: screen)
                     }
                 }
                 let missing = model.categories.filter { !screen.categories.contains($0.id) }
@@ -293,17 +299,10 @@ struct ScreensTab: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
+                    .padding(.vertical, 4)
                     .help("Put another category on this monitor")
                 }
             }
-            Spacer()
-            Picker("", selection: Binding(get: { screen.split }, set: { actions.split(screen.id, $0) })) {
-                Text("Side by side").tag(true)
-                Text("One at a time").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 220)
         }
         .padding(12)
         .background(.white.opacity(0.04), in: .rect(cornerRadius: 10))
@@ -311,6 +310,168 @@ struct ScreensTab: View {
         .dropDestination(for: String.self) { items, _ in actions.drop(items, on: screen.id) } isTargeted: { on in
             targeted = on ? screen.id : (targeted == screen.id ? nil : targeted)
         }
+    }
+
+    // A category on a monitor: drag it elsewhere, move it with ⇆, take it off with ×.
+    func chip(_ category: WorkspaceCore.Category, on screen: Setup.Screen) -> some View {
+        let id = category.id
+        let others = model.screens.filter { $0.categories.contains(id) }.count > 1
+        return HStack(spacing: 4) {
+            CategoryLabel(category: category, letter: model.letters["\(screen.id)|\(id)"])
+                .draggable("category:\(id)") { CategoryLabel(category: category) }
+                .dropDestination(for: String.self) { items, _ in actions.drop(items, on: screen.id, before: id) }
+            if model.screens.count > 1 {
+                Menu {
+                    ForEach(model.screens.filter { $0.id != screen.id }) { other in
+                        Button("Move to \(other.name)") { actions.place(id, other.id) }
+                    }
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Move \(category.name) to another monitor")
+            }
+            Button { actions.removeFromScreen(id, screen.id) } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .help(others ? "Take \(category.name) off this monitor. It stays on the others."
+                             : "Take \(category.name) off this monitor. Its windows wait until you add it back or press Option-\(category.letter.uppercased()).")
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .padding(.trailing, 6)
+        .background(.white.opacity(0.04), in: .capsule)
+    }
+}
+
+// Saved profiles, one per set of monitors. The one for the monitors connected now is in use.
+struct ProfileStrip: View {
+    var model: Setup.Model
+    var actions: Setup.Actions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("PROFILES").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.tertiary)
+                Text("Spacey picks the profile for the monitors you plug in, and makes a new one for a new desk.")
+                    .font(.system(size: 11.5)).foregroundStyle(.tertiary).lineLimit(1)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(model.profiles) { card in
+                        ProfileCardView(card: card, others: model.profiles.filter { $0.id != card.id }, actions: actions)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ProfileCardView: View {
+    var card: Setup.ProfileCard
+    var others: [Setup.ProfileCard]
+    var actions: Setup.Actions
+    @State private var name = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            MiniMonitors(monitors: card.monitors, active: card.active).frame(width: 58, height: 38)
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("Name", text: $name)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .semibold))
+                    .focused($editing)
+                    .frame(width: 130)
+                    .onSubmit { actions.renameProfile(card.id, name) }
+                    .onChange(of: editing) { if !editing && name != card.name { actions.renameProfile(card.id, name) } }
+                HStack(spacing: 5) {
+                    if card.active { Circle().fill(.green).frame(width: 6, height: 6) }
+                    Text("\(card.active ? "In use" : "Not connected") · \(card.monitors.count) monitor\(card.monitors.count == 1 ? "" : "s")")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            Menu {
+                if card.active {
+                    Menu("Copy layout from") {
+                        ForEach(others) { other in Button(other.name) { actions.copyProfile(other.id) } }
+                    }
+                    .disabled(others.isEmpty)
+                } else {
+                    Button("Use this layout for these monitors") { actions.copyProfile(card.id) }
+                    Divider()
+                    Button("Delete \(card.name)", role: .destructive) { actions.deleteProfile(card.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.white.opacity(card.active ? 0.07 : 0.03), in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(card.active ? Color.accentColor.opacity(0.8) : .white.opacity(0.08), lineWidth: 1))
+        .onAppear { name = card.name }
+        .onChange(of: card.name) { name = card.name }
+    }
+}
+
+// A profile's monitors drawn small, in place, tinted by their first category.
+struct MiniMonitors: View {
+    var monitors: [Setup.ProfileCard.Monitor]
+    var active: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let frames = monitors.map(\.frame)
+            let minX = frames.map(\.x).min() ?? 0, minY = frames.map(\.y).min() ?? 0
+            let maxX = frames.map { $0.x + $0.width }.max() ?? 1, maxY = frames.map { $0.y + $0.height }.max() ?? 1
+            let scale = min(geometry.size.width / max(1, maxX - minX), geometry.size.height / max(1, maxY - minY))
+            let offsetX = (geometry.size.width - (maxX - minX) * scale) / 2
+            let offsetY = (geometry.size.height - (maxY - minY) * scale) / 2
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(monitors.enumerated()), id: \.offset) { _, monitor in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(monitor.color.map { Color(hex: $0).opacity(active ? 0.75 : 0.4) } ?? .white.opacity(0.15))
+                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(.white.opacity(0.35), lineWidth: 0.5))
+                        .frame(width: max(2, monitor.frame.width * scale - 2), height: max(2, monitor.frame.height * scale - 2))
+                        .offset(x: offsetX + (monitor.frame.x - minX) * scale + 1, y: offsetY + (monitor.frame.y - minY) * scale + 1)
+                }
+            }
+        }
+    }
+}
+
+// Lays children out in rows, wrapping to the next row when one is full.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        return CGSize(width: proposal.width ?? rows.width, height: rows.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, origin) in zip(subviews, arrange(subviews, width: bounds.width).origins) {
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> (origins: [CGPoint], width: CGFloat, height: CGFloat) {
+        var origins: [CGPoint] = []
+        var x = 0.0, y = 0.0, row = 0.0, widest = 0.0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width { x = 0; y += row + spacing; row = 0 }
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            widest = max(widest, x - spacing)
+            row = max(row, size.height)
+        }
+        return (origins, widest, y + row)
     }
 }
 
@@ -373,10 +534,12 @@ struct WindowRow: View {
 
 struct CategoryLabel: View {
     var category: WorkspaceCore.Category
+    // The area's own letter, when it differs from the category's.
+    var letter: String?
 
     var body: some View {
         HStack(spacing: 5) {
-            Text(category.letter.uppercased())
+            Text((letter ?? category.letter).uppercased())
                 .font(.system(size: 10, weight: .heavy).monospaced())
                 .frame(width: 16, height: 16)
                 .background(Color(hex: category.color), in: .rect(cornerRadius: 4))
@@ -454,7 +617,7 @@ struct Arrangement: View {
                         VStack(spacing: 3) {
                             Image(systemName: category.icon).font(.system(size: 13, weight: .semibold))
                             HStack(spacing: 4) {
-                                Text("⌥\((model.letters[area] ?? category.letter).uppercased())")
+                                Text((model.letters[area] ?? category.letter).uppercased())
                                     .font(.system(size: 9.5, weight: .heavy).monospaced())
                                     .padding(.horizontal, 4).padding(.vertical, 1)
                                     .background(Color(hex: category.color), in: .rect(cornerRadius: 3))

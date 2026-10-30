@@ -118,9 +118,12 @@ public struct Profile: Codable, Equatable, Sendable {
     // Categories taken off every monitor on purpose. Their windows stay parked until the category is
     // put back, and Spacey doesn't place them on its own.
     public var unplaced: [String]?
+    // The monitors as they were last connected, so setup can draw a profile that isn't in use and
+    // a new desk can start from the profile whose monitors look most like its own.
+    public var displays: [Display]?
 
-    public init(name: String, screens: [String: ScreenSetup], unplaced: [String]? = nil) {
-        self.name = name; self.screens = screens; self.unplaced = unplaced
+    public init(name: String, screens: [String: ScreenSetup], unplaced: [String]? = nil, displays: [Display]? = nil) {
+        self.name = name; self.screens = screens; self.unplaced = unplaced; self.displays = displays
     }
 }
 
@@ -368,13 +371,23 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public func profile(for displays: [Display]) -> Profile? { profiles[Self.topologyKey(displays)] }
 
     // Makes sure this monitor arrangement has a profile and that every category lives on a screen.
-    // A new arrangement spreads categories across screens, biggest screen first; a screen with more
-    // than two categories shows one at a time.
+    // A new arrangement starts from the saved profile whose monitors look most like its own (a
+    // second desk with the same monitors works at once). Failing that, categories are spread across
+    // screens, biggest first, and a screen with more than two shows one at a time.
     public mutating func ensureProfile(displays: [Display]) {
         guard !displays.isEmpty else { return }
         let key = Self.topologyKey(displays)
         let isNew = profiles[key] == nil
-        var profile = profiles[key] ?? Profile(name: displays.count == 1 ? "Laptop" : "\(displays.count) screens", screens: [:])
+        var profile: Profile
+        if let existing = profiles[key] {
+            profile = existing
+        } else if let source = closestProfile(to: displays) {
+            profile = Self.adapt(source, to: displays)
+            profile.name = uniqueProfileName(source.name)
+        } else {
+            profile = Profile(name: uniqueProfileName(Self.defaultName(for: displays)), screens: [:])
+        }
+        profile.displays = displays
         for display in displays where profile.screens[display.id] == nil {
             profile.screens[display.id] = ScreenSetup(categories: [], split: true)
         }
@@ -392,7 +405,84 @@ public struct DesktopState: Codable, Equatable, Sendable {
                 profile.screens[id]?.split = false
             }
         }
-        profiles[key] = profile
+        if profiles[key] != profile { profiles[key] = profile }
+    }
+
+    static func defaultName(for displays: [Display]) -> String {
+        if displays.count == 1 { return displays[0].name.contains("Built-in") ? "Laptop" : displays[0].name }
+        return "Desk"
+    }
+
+    func uniqueProfileName(_ base: String) -> String {
+        let taken = Set(profiles.values.map(\.name))
+        guard taken.contains(base) else { return base }
+        return (2...).lazy.map { "\(base) \($0)" }.first { !taken.contains($0) }!
+    }
+
+    // The saved profile, for other monitors, whose monitors best match these: the same number,
+    // each paired with one of the same shape, preferring the same model.
+    public func closestProfile(to displays: [Display]) -> Profile? {
+        let key = Self.topologyKey(displays)
+        return profiles.filter { $0.key != key }.sorted { $0.key < $1.key }.compactMap { _, profile -> (Profile, Int)? in
+            guard let saved = profile.displays, saved.count == displays.count else { return nil }
+            let pairs = Self.pair(saved, with: displays)
+            guard pairs.allSatisfy({ target, source in
+                let a = displays.first { $0.id == target }!, b = saved.first { $0.id == source }!
+                return Self.vertical(a) == Self.vertical(b)
+            }) else { return nil }
+            let score = pairs.filter { target, source in
+                displays.first { $0.id == target }!.name == saved.first { $0.id == source }!.name
+            }.count
+            return (profile, score)
+        }.max { $0.1 < $1.1 }?.0
+    }
+
+    static func vertical(_ display: Display) -> Bool { display.frame.height > display.frame.width }
+
+    // Pairs each of `targets` (by id) with one of `sources`, left to right, preferring the same
+    // model and then the same shape.
+    static func pair(_ sources: [Display], with targets: [Display]) -> [String: String] {
+        let order: (Display, Display) -> Bool = { ($0.frame.x, $0.frame.y) < ($1.frame.x, $1.frame.y) }
+        var free = sources.sorted(by: order)
+        var pairs: [String: String] = [:]
+        for target in targets.sorted(by: order) where !free.isEmpty {
+            let best = free.indices.max { a, b in
+                let score = { (d: Display) in (d.name == target.name ? 2 : 0) + (vertical(d) == vertical(target) ? 1 : 0) }
+                return (score(free[a]), b) < (score(free[b]), a)
+            }!
+            pairs[target.id] = free.remove(at: best).id
+        }
+        return pairs
+    }
+
+    // `profile`'s arrangement moved onto `displays`, monitor by monitor.
+    static func adapt(_ profile: Profile, to displays: [Display]) -> Profile {
+        var adapted = Profile(name: profile.name, screens: [:], unplaced: profile.unplaced, displays: displays)
+        for (target, source) in pair(profile.displays ?? [], with: displays) {
+            var setup = profile.screens[source] ?? ScreenSetup(categories: [], split: true)
+            setup.showing = setup.showing.flatMap { setup.categories.contains($0) ? $0 : nil }
+            adapted.screens[target] = setup
+        }
+        return adapted
+    }
+
+    // Replaces the arrangement for these monitors with another profile's, keeping this one's name.
+    public mutating func copyProfile(_ sourceKey: String, displays: [Display]) {
+        let key = Self.topologyKey(displays)
+        guard sourceKey != key, let source = profiles[sourceKey] else { return }
+        let name = profiles[key]?.name ?? source.name
+        var copy = Self.adapt(source, to: displays)
+        copy.name = name
+        profiles[key] = copy
+        for display in displays { for id in copy.screens[display.id]?.categories ?? [] { workspaces["\(id)|\(display.id)"] = nil } }
+        overrides = overrides.filter { area, _ in !displays.contains { area.hasPrefix($0.id + "|") } }
+        ensureProfile(displays: displays)
+    }
+
+    // Forgets a profile for monitors that aren't connected.
+    public mutating func deleteProfile(_ key: String, displays: [Display]) {
+        guard key != Self.topologyKey(displays) else { return }
+        profiles[key] = nil
     }
 
     public func isUnplaced(_ category: String, displays: [Display]) -> Bool {

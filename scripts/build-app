@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+swift build
+binary_dir="$(swift build --show-bin-path)"
+bundle="$PWD/dist/FocusWM.app"
+mkdir -p "$bundle/Contents/MacOS"
+cp "$binary_dir/FocusWM" "$bundle/Contents/MacOS/FocusWM"
+cp packaging/Info.plist "$bundle/Contents/Info.plist"
+codesign --force --sign - --identifier com.nu11ified.focuswm "$bundle"
+printf '%s\n' "$bundle"

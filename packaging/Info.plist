@@ -10,5 +10,10 @@
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSAccessibilityUsageDescription</key><string>Manage your windows with keyboard shortcuts and saved workspace layouts.</string>
+  <key>NSAccessibilityUsageDescription</key><string>Spacey arranges your windows into modes and moves them between screens.</string>
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key><string>com.nu11ified.spacey</string>
+    <key>CFBundleURLSchemes</key><array><string>spacey</string></array>
+  </dict></array>
 </dict></plist>

@@ -10,7 +10,7 @@ final class GlassPanel: NSPanel {
     var onResign: (() -> Void)?
     var interactive = true
 
-    init<Content: View>(_ content: Content) {
+    init<Content: View>(_ content: Content, behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         isFloatingPanel = true
         level = .statusBar
@@ -19,8 +19,8 @@ final class GlassPanel: NSPanel {
         hasShadow = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        let host = NSHostingView(rootView: content)
+        collectionBehavior = behavior
+        let host = ClickThroughHostingView(rootView: content)
         host.sizingOptions = [.intrinsicContentSize]
         contentView = host
     }
@@ -58,6 +58,11 @@ final class GlassPanel: NSPanel {
     }
 }
 
+// Lets a click land on a button in a panel that isn't key, instead of only focusing the panel.
+final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor @Observable
 final class OverlayModel {
     struct Row: Identifiable, Equatable {
@@ -72,11 +77,6 @@ final class OverlayModel {
     var connected = false
     var rexAvailable = true
     var shown = false
-
-    var hud = 1
-    var occupied: Set<Int> = []
-    var rexWorkspace: Int?
-    var hudShown = false
 
     var toast: Row?
     var toastShown = false
@@ -232,33 +232,6 @@ struct InboxView: View {
     }
 }
 
-struct WorkspaceHUD: View {
-    var model: OverlayModel
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(1...9, id: \.self) { number in
-                let current = number == model.hud
-                ZStack(alignment: .topTrailing) {
-                    Text("\(number)")
-                        .font(.system(size: current ? 15 : 12, weight: current ? .bold : .medium).monospacedDigit())
-                        .foregroundStyle(current ? AnyShapeStyle(.white) : model.occupied.contains(number) ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                        .frame(width: current ? 34 : 24, height: 34)
-                        .background(current ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 10))
-                    if model.rexWorkspace == number && !model.attention.isEmpty {
-                        Circle().fill(.orange).frame(width: 7, height: 7).offset(x: -2, y: 3)
-                    }
-                }
-            }
-        }
-        .padding(6)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .scaleEffect(model.hudShown ? 1 : 0.96)
-        .animation(.easeOut(duration: 0.14), value: model.hud)
-        .animation(.easeOut(duration: 0.16), value: model.hudShown)
-    }
-}
-
 struct ToastView: View {
     var model: OverlayModel
 
@@ -288,9 +261,7 @@ final class Overlays {
     let model = OverlayModel()
     var onJump: (RexPane) -> Void = { _ in }
     private lazy var inbox = makeInbox()
-    private lazy var hud = makePassive(WorkspaceHUD(model: model))
     private lazy var toast = makeToast()
-    private var hudTimer: DispatchWorkItem?
     private var toastTimer: DispatchWorkItem?
 
     var inboxVisible: Bool { inbox.isVisible && inbox.alphaValue > 0 }
@@ -299,13 +270,6 @@ final class Overlays {
         let panel = GlassPanel(InboxView(model: model) { [weak self] in self?.jump($0) })
         panel.onResign = { [weak self] in self?.hideInbox() }
         panel.onKey = { [weak self] event in self?.key(event) ?? false }
-        return panel
-    }
-
-    private func makePassive<V: View>(_ view: V) -> GlassPanel {
-        let panel = GlassPanel(view)
-        panel.interactive = false
-        panel.ignoresMouseEvents = true
         return panel
     }
 
@@ -369,27 +333,6 @@ final class Overlays {
         let pane = model.rows[index].pane
         hideInbox()
         onJump(pane)
-    }
-
-    func flashWorkspace(_ number: Int, on screen: NSScreen?) {
-        model.hud = number
-        hud.place(on: screen ?? Self.activeScreen) { area, size in
-            NSPoint(x: area.midX - size.width / 2, y: area.minY + 90)
-        }
-        if hud.alphaValue < 1 || !hud.isVisible {
-            model.hudShown = false
-            hud.fadeIn()
-            DispatchQueue.main.async { self.model.hudShown = true }
-        }
-        hudTimer?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                self?.model.hudShown = false
-                self?.hud.fadeOut(duration: 0.22)
-            }
-        }
-        hudTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
     func showToast(_ row: OverlayModel.Row) {

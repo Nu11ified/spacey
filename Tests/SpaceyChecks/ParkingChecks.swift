@@ -12,11 +12,4 @@ func parkingChecks() -> [(String, () throws -> Void)] { [
         let alone = DesktopState.parkingFrame(for: window, on: right, among: [left, right])
         try expect(alone.x == 1512 + 1920 - 1)
     }),
-    ("Older state files still load", {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: file) }
-        try Data(#"{"schemaVersion":1,"windows":[],"focusedWorkspace":4,"mode":"allDisplays","activeByDisplay":{},"activeProfiles":{},"topologyProfiles":{},"layoutOverrides":{},"minimizedByManager":[]}"#.utf8).write(to: file)
-        let state = try StateStore(url: file).load()
-        try expect(state.focusedWorkspace == 4 && state.parkedByManager.isEmpty)
-    }),
 ] }

@@ -8,7 +8,7 @@ enum DesktopError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .accessibility: "Grant Spacey Accessibility access in System Settings."
-        case .conflict: "Quit AeroSpace before enabling Spacey."
+        case .conflict: "AeroSpace is running. Spacey starts as soon as it quits."
         case .window(let message): message
         }
     }
@@ -135,7 +135,7 @@ final class MacDesktop {
             let moved = AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, position)
             let resized = AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, dimensions)
             guard moved == .success, resized == .success,
-                  frame(window.element)?.approximatelyEquals(target) == true else {
+                  let actual = frame(window.element), near(actual, target) else {
                 throw DesktopError.window("\(window.appID) refused its tile size. Its minimum size may exceed the available tile.")
             }
         }
@@ -145,6 +145,32 @@ final class MacDesktop {
         NSRunningApplication(processIdentifier: window.pid)?.activate()
         _ = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         _ = AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, kCFBooleanTrue)
+    }
+
+    // Within 24pt: terminals and editors snap their size to whole character cells.
+    static func near(_ a: Frame, _ b: Frame) -> Bool {
+        abs(a.x - b.x) < 24 && abs(a.y - b.y) < 24 && abs(a.width - b.width) < 24 && abs(a.height - b.height) < 24
+    }
+
+    static func close(_ window: Window) {
+        if let button = attribute(window.element, kAXCloseButtonAttribute), CFGetTypeID(button) == AXUIElementGetTypeID() {
+            _ = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+        }
+    }
+
+    // Cmd-N to the frontmost app: a new window, the same as choosing File > New Window.
+    static func newWindow() {
+        let source = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: 45, keyDown: down)
+            event?.flags = .maskCommand
+            event?.post(tap: .cghidEventTap)
+        }
+    }
+
+    static func focusedIsFullscreen() -> Bool {
+        guard let element = focusedElement() else { return false }
+        return attribute(element, "AXFullScreen") as? Bool == true
     }
 
     static func focusedElement() -> AXUIElement? {

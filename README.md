@@ -52,6 +52,12 @@ overrides both and teaches Spacey where that app belongs. Without Apple
 Intelligence, built-in knowledge of common apps does the sorting. The model
 sees only app names, bundle IDs and window titles, and nothing leaves the Mac.
 
+When a window that isn't on screen comes forward (a link opened from Slack, Cmd-Tab,
+a new window), it **takes over the area you were working in** rather than
+appearing somewhere else. That monitor's bar then shows a **↩** button with
+what the area showed before, such as ↩ Comms 1, and clicking it puts that back.
+Picking a workspace for that area also ends the takeover.
+
 Windows in workspaces that aren't showing are parked just past a screen corner,
 so switching is instant. Fullscreen windows are left alone, and the bar and
 dock stay out of their Space.
@@ -126,7 +132,7 @@ S and Q are taken by other keys.
 Scripts can drive Spacey with URLs: `spacey://focus/browser`,
 `spacey://workspace/browser/2`, `spacey://move/comms`, `spacey://solo`,
 `spacey://pause`, `spacey://resume`, `spacey://reload`, `spacey://inbox`, `spacey://add/browser/2` and
-`spacey://remove/browser/2` (screens counted left to right),
+`spacey://remove/browser/2` (screens counted left to right), `spacey://restore`,
 `spacey://jump`, `spacey://awake`. `~/Library/Application
 Support/Spacey/status.json` reports the current state.
 

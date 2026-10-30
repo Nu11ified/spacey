@@ -27,8 +27,15 @@ final class Bar {
         var showing: Bool
     }
 
+    // An area showing a window brought in from elsewhere, and what it showed before.
+    struct Restore: Equatable {
+        var category: WorkspaceCore.Category
+        var workspace: Int
+    }
+
     @MainActor @Observable
     final class Model {
+        var restores: [String: [Restore]] = [:]
         var screens: [String: [Item]] = [:]
         var enabled = true
         var solo = false
@@ -46,6 +53,7 @@ final class Bar {
     var onRex: () -> Void = {}
     var onAwake: () -> Void = {}
     var onSetup: () -> Void = {}
+    var onRestore: (String, String) -> Void = { _, _ in }
     private var panels: [String: GlassPanel] = [:]
     private var timer: Timer?
 
@@ -67,7 +75,8 @@ final class Bar {
                                    category: { [weak self] in self?.onCategory($0) },
                                    workspace: { [weak self] in self?.onWorkspace($0, $1, display.id) },
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
-                                   awake: { [weak self] in self?.onAwake() }, setup: { [weak self] in self?.onSetup() })
+                                   awake: { [weak self] in self?.onAwake() }, setup: { [weak self] in self?.onSetup() },
+                                   restore: { [weak self] in self?.onRestore($0, display.id) })
                 let panel = GlassPanel(view, fitsContent: false, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])
                 panel.interactive = false
                 panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) - 1)
@@ -117,10 +126,13 @@ struct BarView: View {
     var rex: () -> Void
     var awake: () -> Void
     var setup: () -> Void
+    var restore: (String) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
             ForEach(model.screens[display] ?? [], id: \.category.id) { item in categoryChip(item) }
+                .fixedSize()
+            ForEach(model.restores[display] ?? [], id: \.category.id) { item in restoreChip(item) }
                 .fixedSize()
             Spacer(minLength: 16)
             HStack(spacing: 8) { status }
@@ -172,6 +184,23 @@ struct BarView: View {
         .opacity(item.showing ? 1 : 0.45)
         .animation(.easeOut(duration: 0.15), value: armed)
         .animation(.easeOut(duration: 0.15), value: item.workspace)
+    }
+
+    // ↩ Comms 1: puts back what this area showed before a window was brought into it.
+    func restoreChip(_ item: Bar.Restore) -> some View {
+        Button { restore(item.category.id) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.uturn.backward").font(.system(size: 10, weight: .bold))
+                Text("\(item.category.name) \(item.workspace)").font(.system(size: 11.5, weight: .semibold))
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(Color(hex: item.category.color).opacity(0.35), in: .capsule)
+            .overlay(Capsule().stroke(Color(hex: item.category.color).opacity(0.8), lineWidth: 1))
+        }
+        .buttonStyle(PressStyle())
+        .help("Put \(item.category.name) \(item.workspace) back here")
+        .transition(.opacity.combined(with: .scale(scale: 0.92)))
     }
 
     @ViewBuilder

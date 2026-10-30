@@ -121,6 +121,15 @@ public struct Profile: Codable, Equatable, Sendable {
     }
 }
 
+// What a category's area on one screen shows instead of its own workspace, after a window from
+// elsewhere was brought into it (a link opened from Slack, say).
+public struct Slot: Codable, Equatable, Sendable {
+    public var category: String
+    public var workspace: Int
+
+    public init(category: String, workspace: Int) { self.category = category; self.workspace = workspace }
+}
+
 public struct LiveWindow: Sendable {
     public var id: UUID
     public var frame: Frame
@@ -156,12 +165,14 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public var minimizedByManager: Set<UUID> = []
     // Pre-park frames of windows Spacey moved offscreen, so pause and crash recovery can restore them.
     public var parkedByManager: [UUID: Frame] = [:]
+    // "displayID|categoryID" → what that area shows instead, until restored.
+    public var overrides: [String: Slot] = [:]
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, categories, windows, profiles, workspaces, focusedCategory, focusedWindow, solo,
-             windowLayouts, minimizedByManager, parkedByManager
+             windowLayouts, minimizedByManager, parkedByManager, overrides
     }
 
     // Fields added after a file was written decode to their defaults instead of rejecting the file.
@@ -178,6 +189,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
         windowLayouts = try c.decodeIfPresent([String: TileLayout].self, forKey: .windowLayouts) ?? [:]
         minimizedByManager = try c.decodeIfPresent(Set<UUID>.self, forKey: .minimizedByManager) ?? []
         parkedByManager = try c.decodeIfPresent([UUID: Frame].self, forKey: .parkedByManager) ?? [:]
+        overrides = try c.decodeIfPresent([String: Slot].self, forKey: .overrides) ?? [:]
     }
 
     public static func topologyKey(_ displays: [Display]) -> String {
@@ -211,6 +223,32 @@ public struct DesktopState: Codable, Equatable, Sendable {
             focus(record.category, on: showing, displays: displays)
         } else {
             select(workspace: record.workspace, in: record.category, on: preferred, displays: displays)
+        }
+    }
+
+    // MARK: Bringing a window into the area you're in
+
+    // Shows a window's category and workspace in place of `category`'s area on `display`.
+    public mutating func summon(_ window: UUID, into display: Display, replacing category: String) {
+        guard let record = record(window) else { return }
+        overrides["\(display.id)|\(category)"] = Slot(category: record.category, workspace: record.workspace)
+        focusedWindow = window
+        focusedCategory = record.category
+    }
+
+    // Puts the area back to its own category and workspace.
+    public mutating func restore(_ category: String, on display: Display) {
+        overrides["\(display.id)|\(category)"] = nil
+        focusedCategory = category
+    }
+
+    // Drops takeovers whose windows are gone or whose area no longer exists.
+    public mutating func pruneOverrides(live: Set<UUID>, displays: [Display]) {
+        overrides = overrides.filter { key, slot in
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let display = displays.first(where: { $0.id == parts[0] }),
+                  hosts(of: parts[1], displays: displays).contains(where: { $0.id == display.id }) else { return false }
+            return windows.contains { $0.category == slot.category && $0.workspace == slot.workspace && live.contains($0.id) }
         }
     }
 
@@ -339,6 +377,8 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public mutating func select(workspace number: Int, in category: String, on display: Display? = nil, displays: [Display]) {
         guard (1...9).contains(number) else { return }
         let hosts = hosts(of: category, displays: displays)
+        let area = display.flatMap { d in hosts.first { $0.id == d.id } } ?? hosts.first
+        if let area { overrides["\(area.id)|\(category)"] = nil }
         guard hosts.count > 1, let target = display.flatMap({ d in hosts.first { $0.id == d.id } }) ?? hosts.first else {
             workspaces[category] = number
             focus(category, displays: displays)
@@ -453,11 +493,22 @@ public struct DesktopState: Codable, Equatable, Sendable {
             result.append(Placement(id: id, frame: display.usableFrame.inset(gap), hidden: false))
             shown.insert(id)
         } else {
+            // Windows brought into another area show there, not in their own.
+            var claimed: Set<UUID> = []
+            for display in displays {
+                for category in visible(on: display, displays: displays) {
+                    guard let slot = overrides["\(display.id)|\(category)"] else { continue }
+                    windows.filter { $0.category == slot.category && $0.workspace == slot.workspace }.forEach { claimed.insert($0.id) }
+                }
+            }
             for display in displays {
                 // A category with nothing in its current workspace gives its share of the screen away.
                 let groups = visible(on: display, displays: displays).map { category in
+                    if let slot = overrides["\(display.id)|\(category)"] {
+                        return (category, windows.filter { $0.category == slot.category && $0.workspace == slot.workspace && showable($0) && !shown.contains($0.id) })
+                    }
                     let number = workspace(of: category, on: display, displays: displays)
-                    return (category, windows.filter { $0.category == category && $0.workspace == number && showable($0) && !shown.contains($0.id) })
+                    return (category, windows.filter { $0.category == category && $0.workspace == number && showable($0) && !shown.contains($0.id) && !claimed.contains($0.id) })
                 }.filter { !$0.1.isEmpty }
                 guard !groups.isEmpty else { continue }
                 let setup = profile(for: displays)?.screens[display.id]

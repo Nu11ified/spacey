@@ -29,6 +29,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     var awake: IOPMAssertionID?
     var previous: (category: String, workspace: Int)?
     var classifying: Set<UUID> = []
+    // Windows on screen after the last pass, to tell a window coming from offscreen.
+    var lastShown: Set<UUID> = []
     let rex = RexBridge()
     let overlays = Overlays()
     let dock = Dock()
@@ -71,6 +73,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             if self.rex.board.attention.isEmpty { self.toggleInbox() } else { self.jumpToMostUrgent() }
         }
         bar.onAwake = { [weak self] in self?.toggleAwake() }
+        bar.onRestore = { [weak self] category, displayID in self?.restore(category, onDisplay: displayID) }
         bar.onSetup = { [weak self] in self?.toggleSetup() }
         setup.actions = setupActions()
         startRex()
@@ -207,7 +210,8 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     // spacey://focus/browser, spacey://workspace/browser/2, spacey://move/comms, spacey://solo,
     // spacey://pause, spacey://resume, spacey://reload, spacey://inbox, spacey://jump, spacey://awake,
-    // spacey://setup/1 (0 screens, 1 categories, 2 shortcuts), spacey://add/browser/2, spacey://remove/browser/2
+    // spacey://setup/1 (0 screens, 1 categories, 2 shortcuts), spacey://add/browser/2, spacey://remove/browser/2,
+    // spacey://restore
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: text), url.scheme == "spacey" else { return }
@@ -226,6 +230,12 @@ final class Controller: NSObject, NSApplicationDelegate {
             else { state.remove(parts[0], from: displays[index - 1], displays: self.displays()) }
             applied.removeAll()
             reconcile()
+        case "restore":
+            // Puts back every area that a window was brought into, like the ↩ buttons in the bar.
+            for key in state.overrides.keys {
+                let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+                if parts.count == 2 { restore(parts[1], onDisplay: parts[0]) }
+            }
         case "solo": toggleSolo()
         case "pause": if enabled { pause() }
         case "resume": if !enabled { start() }
@@ -307,12 +317,15 @@ final class Controller: NSObject, NSApplicationDelegate {
         bindings = current
         if !firstPass { created.forEach(classify) }
         if adoptFocus, let id = focusedID, id != state.focusedWindow || state.focusedCategory != state.record(id)?.category {
-            state.follow(id, displays: displays)
+            adopt(id, displays: displays)
         }
+        state.pruneOverrides(live: Set(bindings.keys), displays: displays)
         let live = bindings.map { LiveWindow(id: $0.key, frame: $0.value.frame, minimized: $0.value.minimized) }
+        let plan = state.plan(displays: displays, live: live, gap: config.gap)
+        lastShown = Set(plan.filter { !$0.hidden }.map(\.id))
         do {
             try store.save(state)
-            for placement in state.plan(displays: displays, live: live, gap: config.gap) {
+            for placement in plan {
                 guard let window = bindings[placement.id] else { continue }
                 if placement.hidden {
                     // User-minimized windows stay in the Dock; everything else parks offscreen instantly.
@@ -353,6 +366,37 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         installAXObservers()
         refresh()
+    }
+
+    // Focus moved to `id`. A window that was offscreen (a link opened from Slack, Cmd-Tab, a new
+    // window) comes into the area you were working in; the bar then offers to put that area back.
+    func adopt(_ id: UUID, displays: [Display]) {
+        guard !lastShown.isEmpty, !lastShown.contains(id), let previous = state.focusedWindow, lastShown.contains(previous),
+              let frame = bindings[previous].flatMap({ MacDesktop.frame($0.element) }),
+              let display = displays.first(where: { $0.frame.contains(x: frame.midX, y: frame.midY) }),
+              let record = state.record(previous), let window = state.record(id) else {
+            state.follow(id, displays: displays, preferred: focusedDisplay)
+            return
+        }
+        // The area the previous window was in: its own category's, or the one it had taken over.
+        let area = state.visible(on: display, displays: displays).first { category in
+            let slot = state.overrides["\(display.id)|\(category)"]
+            return slot.map { $0.category == record.category && $0.workspace == record.workspace } ?? (category == record.category)
+        } ?? record.category
+        if window.category == area && state.overrides["\(display.id)|\(area)"] == nil {
+            state.select(workspace: window.workspace, in: area, on: display, displays: displays)
+            state.focusedWindow = id
+        } else {
+            state.summon(id, into: display, replacing: area)
+        }
+    }
+
+    func restore(_ category: String, onDisplay displayID: String) {
+        guard let display = displays().first(where: { $0.id == displayID }) else { return }
+        state.restore(category, on: display)
+        applied.removeAll()
+        reconcile()
+        raiseCurrent(in: category, on: display)
     }
 
     // A window from an app no category claims asks Apple Intelligence where it belongs. The answer
@@ -710,6 +754,14 @@ final class Controller: NSObject, NSApplicationDelegate {
         model.working = rex.board.working.count
         model.awake = awake != nil
         model.chord = chordCategory
+        model.restores = [:]
+        for (key, _) in state.overrides {
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let category = state.category(parts[1]),
+                  let display = displays.first(where: { $0.id == parts[0] }) else { continue }
+            model.restores[parts[0], default: []].append(Bar.Restore(category: category,
+                                                                     workspace: state.workspace(of: category.id, on: display, displays: displays)))
+        }
         bar.layout(displays: displays)
     }
 

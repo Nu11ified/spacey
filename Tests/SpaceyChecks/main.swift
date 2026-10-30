@@ -108,6 +108,28 @@ let checks: [(String, () throws -> Void)] = [
         try expect(landscape.frame.contains(x: shown.midX, y: shown.midY))
         try expect(!hidden(zen1, plan) && hidden(zen2, plan))
     }),
+    ("A window opened from elsewhere takes over the area you're in, and can go back", {
+        var (state, slack, _, zen2, _) = deskState()
+        // Working in Comms; a link opens Browser workspace 2, which isn't showing.
+        state.summon(zen2, into: portrait, replacing: "comms")
+        var plan = state.plan(displays: desk, live: live(state))
+        let took = try frame(zen2, plan).unwrap()
+        try expect(hidden(slack, plan) && took.y < portrait.frame.midY)
+        try expect(state.focusedCategory == "browser")
+        state.restore("comms", on: portrait)
+        plan = state.plan(displays: desk, live: live(state))
+        try expect(!hidden(slack, plan) && hidden(zen2, plan))
+    }),
+    ("Picking a workspace for an area ends its takeover", {
+        var (state, slack, _, zen2, _) = deskState()
+        state.summon(zen2, into: portrait, replacing: "comms")
+        state.select(workspace: 1, in: "comms", on: portrait, displays: desk)
+        try expect(state.overrides.isEmpty)
+        try expect(!hidden(slack, state.plan(displays: desk, live: live(state))))
+        state.summon(zen2, into: portrait, replacing: "comms")
+        state.pruneOverrides(live: Set([slack]), displays: desk)
+        try expect(state.overrides.isEmpty)
+    }),
     ("Picking a workspace changes only that category", {
         var (state, slack, zen1, zen2, _) = deskState()
         state.select(workspace: 2, in: "browser", displays: desk)

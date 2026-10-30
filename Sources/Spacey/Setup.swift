@@ -29,6 +29,7 @@ final class Setup {
         var tab = 0
         var profile = ""
         var screens: [Screen] = []
+        var unplaced: [String] = []
         var categories: [WorkspaceCore.Category] = []
         var workspaces: [String: Int] = [:]
         // "category|displayID" → the workspace that screen shows.
@@ -156,9 +157,37 @@ struct ScreensTab: View {
                     .frame(maxWidth: .infinity)
 
                 ForEach(model.screens) { screen in screenRow(screen) }
+                if !model.unplaced.isEmpty { unplacedRow }
             }
             .padding(22)
         }
+    }
+
+    // Categories on no monitor. Their windows are parked; Option-letter brings one to where you are.
+    var unplacedRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Not on a monitor").font(.system(size: 13, weight: .semibold))
+                Text("Option-letter brings one to you").font(.system(size: 11)).foregroundStyle(.tertiary)
+            }
+            .frame(width: 170, alignment: .leading)
+            ForEach(model.unplaced, id: \.self) { id in
+                if let category = model.categories.first(where: { $0.id == id }) {
+                    HStack(spacing: 2) {
+                        CategoryLabel(category: category)
+                        Menu {
+                            ForEach(model.screens) { screen in Button("Add to \(screen.name)") { actions.add(id, screen.id) } }
+                        } label: { Image(systemName: "plus") }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(.white.opacity(0.025), in: .rect(cornerRadius: 10))
     }
 
     func screenRow(_ screen: Setup.Screen) -> some View {
@@ -185,11 +214,11 @@ struct ScreensTab: View {
                             .menuIndicator(.hidden)
                             .fixedSize()
                             .help("Move \(category.name) to another monitor")
-                            if model.screens.filter({ $0.categories.contains(id) }).count > 1 {
-                                Button { actions.removeFromScreen(id, screen.id) } label: { Image(systemName: "xmark") }
-                                    .buttonStyle(.borderless)
-                                    .help("Take \(category.name) off this monitor. It stays on the others.")
-                            }
+                            let others = model.screens.filter { $0.categories.contains(id) }.count > 1
+                            Button { actions.removeFromScreen(id, screen.id) } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.borderless)
+                                .help(others ? "Take \(category.name) off this monitor. It stays on the others."
+                                             : "Take \(category.name) off this monitor. Its windows wait until you add it back or press Option-\(category.letter.uppercased()).")
                         }
                     }
                 }
@@ -233,7 +262,7 @@ struct CategoryLabel: View {
                 .font(.system(size: 10, weight: .heavy).monospaced())
                 .frame(width: 16, height: 16)
                 .background(Color(hex: category.color), in: .rect(cornerRadius: 4))
-            Text(category.name).font(.system(size: 12, weight: .semibold))
+            Text(category.name).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

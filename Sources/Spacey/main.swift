@@ -464,6 +464,11 @@ final class Controller: NSObject, NSApplicationDelegate {
     func focusCategory(_ category: String) {
         guard enabled, state.category(category) != nil else { return }
         remember()
+        // A category that's on no monitor comes to the one you're on.
+        if state.isUnplaced(category, displays: displays()), let here = focusedDisplay {
+            state.add(category, to: here, displays: displays())
+            applied.removeAll()
+        }
         let display = target(for: category)
         state.focus(category, on: display, displays: displays())
         reconcile()
@@ -761,6 +766,7 @@ final class Controller: NSObject, NSApplicationDelegate {
                 model.shown["\(id)|\(display.id)"] = state.workspace(of: id, on: display, displays: displays)
             }
         }
+        model.unplaced = profile?.unplaced ?? []
         model.windows = state.windows.filter { bindings[$0.id] != nil }.map { record in
             let app = NSRunningApplication.runningApplications(withBundleIdentifier: record.appID).first
             return Setup.Window(id: record.id, app: app?.localizedName ?? record.appID, title: record.title, icon: app?.icon,

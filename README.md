@@ -34,7 +34,9 @@ for example. Each monitor then shows its own workspace of that category, and
 Option-letter followed by a number changes the copy on the monitor you're on. Picking
 a workspace that's already showing on another monitor swaps the two. In setup,
 **+ Add** puts a category on a monitor without taking it off the others, and ×
-takes it off one monitor.
+takes it off one monitor. Taking a category off its last monitor parks its
+windows and lists it under "Not on a monitor". Spacey leaves it there until you
+add it back, or press its Option-letter to bring it to the monitor you're on.
 
 A **profile** is one monitor arrangement, such as the desk or the laptop alone.
 Spacey keeps one for each set of connected displays and switches as monitors

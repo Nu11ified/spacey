@@ -73,6 +73,20 @@ let checks: [(String, () throws -> Void)] = [
         state.add("browser", to: landscape, displays: desk)
         try expect(state.workspace(of: "browser", on: landscape, displays: desk) == 1)
     }),
+    ("A monitor can be cleared, and the categories stay off until brought back", {
+        var (state, _, _, _, _) = deskState()
+        state.remove("notes", from: laptop, displays: desk)
+        state.remove("media", from: laptop, displays: desk)
+        state.ensureProfile(displays: desk)
+        try expect(state.profile(for: desk)?.screens["laptop"]?.categories == [])
+        try expect(state.isUnplaced("notes", displays: desk) && state.hosts(of: "notes", displays: desk).isEmpty)
+        let notes = WindowRecord(appID: "com.apple.Notes", title: "Notes", category: "notes")
+        state.windows.append(notes)
+        try expect(hidden(notes.id, state.plan(displays: desk, live: live(state))))
+        state.add("notes", to: laptop, displays: desk)
+        try expect(!state.isUnplaced("notes", displays: desk))
+        try expect(!hidden(notes.id, state.plan(displays: desk, live: live(state))))
+    }),
     ("Taking a category off one monitor leaves the other as it was", {
         var (state, _, zen1, zen2, _) = deskState()
         state.add("browser", to: landscape, displays: desk)
@@ -81,7 +95,7 @@ let checks: [(String, () throws -> Void)] = [
         let wide = try frame(zen2, plan).unwrap()
         try expect(landscape.frame.contains(x: wide.midX, y: wide.midY) && hidden(zen1, plan))
         state.remove("browser", from: landscape, displays: desk)
-        try expect(state.hosts(of: "browser", displays: desk).map(\.id) == ["landscape"])
+        try expect(state.hosts(of: "browser", displays: desk).isEmpty && state.isUnplaced("browser", displays: desk))
     }),
     ("Focusing a hidden window on a shared category shows it where you are", {
         var (state, _, zen1, zen2, _) = deskState()

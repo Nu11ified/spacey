@@ -112,8 +112,13 @@ public struct ScreenSetup: Codable, Equatable, Sendable {
 public struct Profile: Codable, Equatable, Sendable {
     public var name: String
     public var screens: [String: ScreenSetup]
+    // Categories taken off every monitor on purpose. Their windows stay parked until the category is
+    // put back, and Spacey doesn't place them on its own.
+    public var unplaced: [String]?
 
-    public init(name: String, screens: [String: ScreenSetup]) { self.name = name; self.screens = screens }
+    public init(name: String, screens: [String: ScreenSetup], unplaced: [String]? = nil) {
+        self.name = name; self.screens = screens; self.unplaced = unplaced
+    }
 }
 
 public struct LiveWindow: Sendable {
@@ -242,6 +247,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
         let key = Self.topologyKey(displays)
         guard self.category(category) != nil, profiles[key]?.screens[display.id]?.categories.contains(category) == false else { return }
         let before = hosts(of: category, displays: displays).map { ($0, workspace(of: category, on: $0, displays: displays)) }
+        profiles[key]?.unplaced?.removeAll { $0 == category }
         profiles[key]?.screens[display.id]?.categories.append(category)
         profiles[key]?.screens[display.id]?.showing = category
         // Screens that already showed the category keep showing the same workspace.
@@ -249,11 +255,19 @@ public struct DesktopState: Codable, Equatable, Sendable {
         for (host, number) in before { show(number, of: category, on: host, hosts: hosts) }
     }
 
-    // Takes a category off one screen, as long as it stays on another.
+    // Takes a category off a screen. Off its last screen, it waits in `unplaced` with its windows
+    // parked until it's put back.
     public mutating func remove(_ category: String, from display: Display, displays: [Display]) {
         let key = Self.topologyKey(displays)
         let hosts = hosts(of: category, displays: displays)
-        guard hosts.count > 1 else { return }
+        guard hosts.contains(where: { $0.id == display.id }) else { return }
+        if hosts.count == 1 {
+            profiles[key]?.screens[display.id]?.categories.removeAll { $0 == category }
+            if profiles[key]?.screens[display.id]?.showing == category { profiles[key]?.screens[display.id]?.showing = nil }
+            let unplaced = (profiles[key]?.unplaced ?? []) + [category]
+            profiles[key]?.unplaced = unplaced
+            return
+        }
         let kept = hosts.filter { $0.id != display.id }.map { ($0, workspace(of: category, on: $0, displays: displays)) }
         profiles[key]?.screens[display.id]?.categories.removeAll { $0 == category }
         if profiles[key]?.screens[display.id]?.showing == category { profiles[key]?.screens[display.id]?.showing = nil }
@@ -279,7 +293,8 @@ public struct DesktopState: Codable, Equatable, Sendable {
         }
         let known = Set(categories.map(\.id))
         for id in profile.screens.keys { profile.screens[id]?.categories.removeAll { !known.contains($0) } }
-        let placed = Set(profile.screens.values.flatMap(\.categories))
+        profile.unplaced?.removeAll { !known.contains($0) }
+        let placed = Set(profile.screens.values.flatMap(\.categories)).union(profile.unplaced ?? [])
         let bySize = displays.sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
         for category in categories where !placed.contains(category.id) {
             let target = bySize.min { (profile.screens[$0.id]?.categories.count ?? 0) < (profile.screens[$1.id]?.categories.count ?? 0) }!
@@ -291,6 +306,10 @@ public struct DesktopState: Codable, Equatable, Sendable {
             }
         }
         profiles[key] = profile
+    }
+
+    public func isUnplaced(_ category: String, displays: [Display]) -> Bool {
+        profile(for: displays)?.unplaced?.contains(category) == true
     }
 
     public func screen(of category: String, displays: [Display]) -> Display? {
@@ -354,6 +373,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
         let key = Self.topologyKey(displays)
         guard var profile = profiles[key], self.category(category) != nil else { return }
         for id in profile.screens.keys { profile.screens[id]?.categories.removeAll { $0 == category } }
+        profile.unplaced?.removeAll { $0 == category }
         profile.screens[display.id, default: ScreenSetup(categories: [], split: true)].categories.append(category)
         profile.screens[display.id]?.showing = category
         profiles[key] = profile

@@ -69,7 +69,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public var topologyProfiles: [String: [Int: String]] = [:]
     public var layoutOverrides: [String: [Int: TileLayout]] = [:]
     public var minimizedByManager: Set<UUID> = []
-    // Pre-park frames of windows FocusWM moved offscreen, so pause and crash recovery can restore them.
+    // Pre-park frames of windows Spacey moved offscreen, so pause and crash recovery can restore them.
     public var parkedByManager: [UUID: Frame] = [:]
 
     public init() {}

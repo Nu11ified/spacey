@@ -12,7 +12,7 @@ enum LocalIntelligence {
 
     static func classify(app: String, title: String) async throws -> WindowSuggestion {
         guard SystemLanguageModel.default.availability == .available else {
-            throw NSError(domain: "FocusWM", code: 1,
+            throw NSError(domain: "Spacey", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence is unavailable: \(status)"])
         }
         let session = LanguageModelSession(instructions: """

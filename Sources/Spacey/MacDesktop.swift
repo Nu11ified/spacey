@@ -7,8 +7,8 @@ enum DesktopError: LocalizedError {
     case accessibility, conflict, window(String)
     var errorDescription: String? {
         switch self {
-        case .accessibility: "Grant FocusWM Accessibility access in System Settings."
-        case .conflict: "Quit AeroSpace before enabling FocusWM."
+        case .accessibility: "Grant Spacey Accessibility access in System Settings."
+        case .conflict: "Quit AeroSpace before enabling Spacey."
         case .window(let message): message
         }
     }

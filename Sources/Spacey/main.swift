@@ -29,7 +29,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "FocusWM")
+        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "Spacey")
         rebuildMenu()
         startRex()
         let center = NSWorkspace.shared.notificationCenter
@@ -162,7 +162,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func alert(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "FocusWM"
+        alert.messageText = "Spacey"
         alert.informativeText = message
         alert.runModal()
     }
@@ -462,14 +462,14 @@ if CommandLine.arguments.contains("--rex") {
     print(String(data: try encoder.encode(report), encoding: .utf8)!)
 } else {
     let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("FocusWM")
+        .appendingPathComponent("Spacey")
     do {
         let controller = try Controller(store: StateStore(url: directory.appendingPathComponent("desktop.json")))
         app.delegate = controller
         withExtendedLifetime(controller) { app.run() }
     } catch {
         let alert = NSAlert()
-        alert.messageText = "FocusWM could not load saved state"
+        alert.messageText = "Spacey could not load saved state"
         alert.informativeText = "\(error.localizedDescription)\nThe existing file has been left untouched."
         alert.runModal()
     }

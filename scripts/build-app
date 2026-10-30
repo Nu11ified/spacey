@@ -3,9 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build
 binary_dir="$(swift build --show-bin-path)"
-bundle="$PWD/dist/FocusWM.app"
+bundle="$PWD/dist/Spacey.app"
 mkdir -p "$bundle/Contents/MacOS"
-cp "$binary_dir/FocusWM" "$bundle/Contents/MacOS/FocusWM"
+cp "$binary_dir/Spacey" "$bundle/Contents/MacOS/Spacey"
 cp packaging/Info.plist "$bundle/Contents/Info.plist"
-codesign --force --sign - --identifier com.nu11ified.focuswm "$bundle"
+codesign --force --sign - --identifier com.nu11ified.spacey "$bundle"
 printf '%s\n' "$bundle"

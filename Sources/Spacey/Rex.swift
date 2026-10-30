@@ -39,7 +39,7 @@ final class RexBridge {
     static var appRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
     static var appFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID }
 
-    // Never starts a Rex server on its own; FocusWM only follows one that is already running.
+    // Never starts a Rex server on its own; Spacey only follows one that is already running.
     static func run(_ arguments: [String]) async -> [String: Any]? {
         guard let cli else { return nil }
         let output = await Task.detached { () -> Data? in

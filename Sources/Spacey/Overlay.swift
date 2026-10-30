@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 import WorkspaceCore
 
-// A borderless glass panel that can take keys without activating FocusWM, so the app
+// A borderless glass panel that can take keys without activating Spacey, so the app
 // underneath keeps its focus state and nothing in the Dock or menu bar flickers.
 final class GlassPanel: NSPanel {
     var onKey: ((NSEvent) -> Bool)?

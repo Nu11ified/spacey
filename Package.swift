@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "FocusWM",
+    name: "Spacey",
     platforms: [.macOS(.v26)],
-    products: [.executable(name: "FocusWM", targets: ["FocusWM"])],
+    products: [.executable(name: "Spacey", targets: ["Spacey"])],
     targets: [
         .target(name: "WorkspaceCore"),
-        .executableTarget(name: "FocusWM", dependencies: ["WorkspaceCore"]),
-        .executableTarget(name: "FocusWMChecks", dependencies: ["WorkspaceCore"], path: "Tests/WorkspaceCoreTests")
+        .executableTarget(name: "Spacey", dependencies: ["WorkspaceCore"]),
+        .executableTarget(name: "SpaceyChecks", dependencies: ["WorkspaceCore"], path: "Tests/SpaceyChecks")
     ]
 )

@@ -49,6 +49,14 @@ final class MacDesktop {
         }
     }
 
+    static func screen(for display: Display) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                  let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return false }
+            return CFUUIDCreateString(nil, uuid)! as String == display.id
+        }
+    }
+
     static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
@@ -98,19 +106,38 @@ final class MacDesktop {
         guard result == .success else { throw DesktopError.window("\(window.appID): minimize failed (\(result.rawValue)).") }
     }
 
+    // Apps that enable AXEnhancedUserInterface (Chrome, Electron, anything a screen reader touched)
+    // animate every AX move. Turning it off for the duration makes moves land instantly.
+    static func withoutEnhancedUI<T>(_ pid: pid_t, _ body: () throws -> T) rethrows -> T {
+        let app = AXUIElementCreateApplication(pid)
+        let enhanced = attribute(app, "AXEnhancedUserInterface") as? Bool == true
+        if enhanced { AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse) }
+        defer { if enhanced { AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) } }
+        return try body()
+    }
+
+    static func setPosition(_ window: Window, _ target: Frame) {
+        var point = CGPoint(x: target.x, y: target.y)
+        withoutEnhancedUI(window.pid) {
+            _ = AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &point)!)
+        }
+    }
+
     static func setFrame(_ window: Window, _ target: Frame) throws {
         if frame(window.element)?.approximatelyEquals(target) == true { return }
         var point = CGPoint(x: target.x, y: target.y)
         var size = CGSize(width: target.width, height: target.height)
         let position = AXValueCreate(.cgPoint, &point)!
         let dimensions = AXValueCreate(.cgSize, &size)!
-        // Some apps clamp sizes differently depending on the current position.
-        _ = AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, dimensions)
-        let moved = AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, position)
-        let resized = AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, dimensions)
-        guard moved == .success, resized == .success,
-              frame(window.element)?.approximatelyEquals(target) == true else {
-            throw DesktopError.window("\(window.appID) refused its tile size. Its minimum size may exceed the available tile.")
+        try withoutEnhancedUI(window.pid) {
+            // Some apps clamp sizes differently depending on the current position.
+            _ = AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, dimensions)
+            let moved = AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, position)
+            let resized = AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, dimensions)
+            guard moved == .success, resized == .success,
+                  frame(window.element)?.approximatelyEquals(target) == true else {
+                throw DesktopError.window("\(window.appID) refused its tile size. Its minimum size may exceed the available tile.")
+            }
         }
     }
 

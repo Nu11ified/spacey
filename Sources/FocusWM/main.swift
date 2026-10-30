@@ -54,7 +54,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(item(enabled ? "Pause and restore windows" : "Enable management", #selector(toggle)))
         menu.addItem(item("Accessibility permission...", #selector(requestAccess)))
-        if !state.minimizedByManager.isEmpty && !enabled {
+        if !(state.minimizedByManager.isEmpty && state.parkedByManager.isEmpty) && !enabled {
             menu.addItem(item("Restore windows from previous session", #selector(recover)))
         }
         menu.addItem(.separator())
@@ -152,17 +152,22 @@ final class Controller: NSObject, NSApplicationDelegate {
             for placement in state.plan(displays: displays, live: live) {
                 guard let window = bindings[placement.id] else { continue }
                 if placement.hidden {
-                    if !window.minimized {
-                        state.minimizedByManager.insert(placement.id)
+                    // User-minimized windows stay in the Dock; everything else parks offscreen instantly.
+                    guard !window.minimized else { continue }
+                    let home = state.workspace(of: placement.id).flatMap { state.display(for: $0, displays: displays) } ?? displays[0]
+                    let parked = DesktopState.parkingFrame(for: window.frame, on: home, among: displays)
+                    if window.frame.approximatelyEquals(parked) { continue }
+                    if state.parkedByManager[placement.id] == nil {
+                        state.parkedByManager[placement.id] = window.frame
                         try store.save(state)
-                        do { try MacDesktop.setMinimized(window, true) }
-                        catch { state.minimizedByManager.remove(placement.id); lastError = error.localizedDescription }
                     }
+                    MacDesktop.setPosition(window, parked)
                 } else {
                     if window.minimized && state.minimizedByManager.contains(placement.id) {
                         try MacDesktop.setMinimized(window, false)
                         state.minimizedByManager.remove(placement.id)
                     }
+                    state.parkedByManager[placement.id] = nil
                     if let target = placement.frame, !failedFrames.contains(placement.id) {
                         do { try MacDesktop.setFrame(window, target) }
                         catch { failedFrames.insert(placement.id); lastError = error.localizedDescription }
@@ -287,6 +292,11 @@ final class Controller: NSObject, NSApplicationDelegate {
                 catch { lastError = error.localizedDescription }
             }
         }
+        for (id, frame) in state.parkedByManager {
+            guard let window = bindings[id] else { continue }
+            MacDesktop.setPosition(window, frame)
+            state.parkedByManager[id] = nil
+        }
         do { try store.save(state) } catch { lastError = error.localizedDescription }
         for observer in axObservers.values { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode) }
         axObservers.removeAll()
@@ -296,7 +306,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     @objc func recover() {
         guard MacDesktop.trusted else { alert(DesktopError.accessibility.localizedDescription); return }
         let windows = MacDesktop.windows()
-        for record in state.windows where state.minimizedByManager.contains(record.id) {
+        for record in state.windows where state.minimizedByManager.contains(record.id) || state.parkedByManager[record.id] != nil {
             let matches = windows.filter {
                 $0.appID == record.appID &&
                 ((!record.accessibilityID.isEmpty && $0.identifier == record.accessibilityID) ||

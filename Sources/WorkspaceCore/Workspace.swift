@@ -69,8 +69,58 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public var topologyProfiles: [String: [Int: String]] = [:]
     public var layoutOverrides: [String: [Int: TileLayout]] = [:]
     public var minimizedByManager: Set<UUID> = []
+    // Pre-park frames of windows FocusWM moved offscreen, so pause and crash recovery can restore them.
+    public var parkedByManager: [UUID: Frame] = [:]
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, windows, focusedWorkspace, focusedWindow, mode, activeByDisplay, activeProfiles,
+             lastTopologyKey, topologyProfiles, layoutOverrides, minimizedByManager, parkedByManager
+    }
+
+    // Fields added after a file was written decode to their defaults instead of rejecting the file.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        windows = try c.decodeIfPresent([WindowRecord].self, forKey: .windows) ?? []
+        focusedWorkspace = try c.decodeIfPresent(Int.self, forKey: .focusedWorkspace) ?? 1
+        focusedWindow = try c.decodeIfPresent(UUID.self, forKey: .focusedWindow)
+        mode = try c.decodeIfPresent(FocusMode.self, forKey: .mode) ?? .allDisplays
+        activeByDisplay = try c.decodeIfPresent([String: Int].self, forKey: .activeByDisplay) ?? [:]
+        activeProfiles = try c.decodeIfPresent([String: [String: Int]].self, forKey: .activeProfiles) ?? [:]
+        lastTopologyKey = try c.decodeIfPresent(String.self, forKey: .lastTopologyKey)
+        topologyProfiles = try c.decodeIfPresent([String: [Int: String]].self, forKey: .topologyProfiles) ?? [:]
+        layoutOverrides = try c.decodeIfPresent([String: [Int: TileLayout]].self, forKey: .layoutOverrides) ?? [:]
+        minimizedByManager = try c.decodeIfPresent(Set<UUID>.self, forKey: .minimizedByManager) ?? []
+        parkedByManager = try c.decodeIfPresent([UUID: Frame].self, forKey: .parkedByManager) ?? [:]
+    }
+
+    public func workspace(of window: UUID) -> Int? { windows.first { $0.id == window }?.workspace }
+
+    public func display(for workspace: Int, displays: [Display]) -> Display? {
+        let id = topologyProfiles[Self.topologyKey(displays)]?[workspace]
+        return displays.first { $0.id == id }
+    }
+
+    // Hidden windows sit just past a screen corner, like AeroSpace, so switching is an instant move
+    // instead of a minimize animation. The corner whose spill-over covers the least of any other
+    // display wins, so a parked window never peeks onto a neighbouring monitor.
+    public static func parkingFrame(for window: Frame, on display: Display, among displays: [Display]) -> Frame {
+        let d = display.frame
+        let corners = [Frame(x: d.x + d.width - 1, y: d.y + d.height - 1, width: window.width, height: window.height),
+                       Frame(x: d.x - window.width + 1, y: d.y + d.height - 1, width: window.width, height: window.height),
+                       Frame(x: d.x + d.width - 1, y: d.y - window.height + 1, width: window.width, height: window.height),
+                       Frame(x: d.x - window.width + 1, y: d.y - window.height + 1, width: window.width, height: window.height)]
+        func overlap(_ a: Frame, _ b: Frame) -> Double {
+            max(0, min(a.x + a.width, b.x + b.width) - max(a.x, b.x)) *
+            max(0, min(a.y + a.height, b.y + b.height) - max(a.y, b.y))
+        }
+        return corners.min { a, b in
+            let others = displays.filter { $0.id != display.id }
+            return others.reduce(0) { $0 + overlap(a, $1.frame) } < others.reduce(0) { $0 + overlap(b, $1.frame) }
+        }!
+    }
 
     public static func topologyKey(_ displays: [Display]) -> String {
         displays.map(\.id).sorted().joined(separator: "|")

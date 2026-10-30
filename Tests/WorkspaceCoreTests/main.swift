@@ -112,9 +112,10 @@ let checks: [(String, () throws -> Void)] = [
 ]
 
 var failures = 0
-for (name, run) in checks {
+let all = checks + parkingChecks()
+for (name, run) in all {
     do { try run(); print("PASS \(name)") }
     catch { failures += 1; print("FAIL \(name): \(error)") }
 }
 if failures > 0 { exit(1) }
-print("\(checks.count) checks passed")
+print("\(all.count) checks passed")

@@ -329,6 +329,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             adopt(id, displays: displays)
         }
         state.pruneOverrides(live: Set(bindings.keys), displays: displays)
+        state.separate(live: Set(bindings.keys))
         if dragging {
             dragging = false
             swapDropped()
@@ -607,7 +608,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func moveFocused(toWorkspace number: Int) {
         guard enabled, let id = focusedID else { return }
-        state.move(window: id, toWorkspace: number)
+        state.move(window: id, toWorkspace: number, live: Set(bindings.keys))
         state.follow(id, displays: displays())
         reconcile()
         if let window = bindings[id] { MacDesktop.raise(window) }
@@ -918,7 +919,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         actions.move = { [weak self] id, category, workspace in
             guard let self else { return }
             self.state.move(window: id, to: category)
-            self.state.move(window: id, toWorkspace: workspace)
+            self.state.move(window: id, toWorkspace: workspace, live: Set(self.bindings.keys))
             self.state.follow(id, displays: self.displays())
             self.applied.removeAll()
             self.reconcile()

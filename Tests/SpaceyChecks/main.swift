@@ -142,6 +142,17 @@ let checks: [(String, () throws -> Void)] = [
         let plan = shown.plan(displays: desk, live: live(shown))
         try expect(try frame(zen1, plan).unwrap().height > portrait.frame.height * 0.9)
     }),
+    ("Windows that land in the same workspace by accident get their own", {
+        var (state, _, zen1, zen2, _) = deskState()
+        let all = Set(state.windows.map(\.id))
+        state.windows[state.windows.firstIndex { $0.id == zen2 }!].workspace = 1
+        state.separate(live: all)
+        try expect(state.record(zen1)?.workspace == 1 && state.record(zen2)?.workspace == 2)
+        // Putting one there on purpose keeps them together.
+        state.move(window: zen2, toWorkspace: 1, live: all)
+        state.separate(live: all)
+        try expect(state.record(zen2)?.workspace == 1 && state.record(zen2)?.together == true)
+    }),
     ("Picking a workspace changes only that category", {
         var (state, slack, zen1, zen2, _) = deskState()
         state.select(workspace: 2, in: "browser", displays: desk)

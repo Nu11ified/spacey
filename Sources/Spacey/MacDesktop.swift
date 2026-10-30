@@ -73,6 +73,16 @@ final class MacDesktop {
         return Frame(x: point.x, y: point.y, width: size.width, height: size.height)
     }
 
+    // Standard windows, plus "dialogs" that have the full set of title-bar buttons. macOS 26 reports
+    // some ordinary windows (minimized Zen and Finder windows, for one) as dialogs; real panels like
+    // status popovers have no buttons and stay unmanaged.
+    static func isWindow(_ window: AXUIElement) -> Bool {
+        let subrole = attribute(window, kAXSubroleAttribute) as? String
+        if subrole == kAXStandardWindowSubrole { return true }
+        guard subrole == kAXDialogSubrole, attribute(window, kAXModalAttribute) as? Bool != true else { return false }
+        return [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute, kAXZoomButtonAttribute].allSatisfy { attribute(window, $0) != nil }
+    }
+
     static func windows() -> [Window] {
         guard trusted else { return [] }
         return NSWorkspace.shared.runningApplications.filter {
@@ -83,7 +93,7 @@ final class MacDesktop {
             AXUIElementSetMessagingTimeout(element, 0.25)
             guard let windows = attribute(element, kAXWindowsAttribute) as? [AXUIElement] else { return [] }
             return windows.compactMap { window in
-                guard attribute(window, kAXSubroleAttribute) as? String == kAXStandardWindowSubrole,
+                guard isWindow(window),
                       attribute(window, "AXFullScreen") as? Bool != true,
                       let rect = frame(window) else { return nil }
                 var positionSettable = DarwinBoolean(false)

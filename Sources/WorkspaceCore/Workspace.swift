@@ -84,6 +84,9 @@ public struct WindowRecord: Codable, Equatable, Sendable, Identifiable {
     public var accessibilityID: String
     public var category: String
     public var workspace: Int
+    // Put into a workspace that already had a window, on purpose, so it shares rather than being
+    // moved to a workspace of its own.
+    public var together: Bool?
 
     public init(id: UUID = UUID(), appID: String, title: String, accessibilityID: String = "",
                 category: String, workspace: Int = 1) {
@@ -418,9 +421,25 @@ public struct DesktopState: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func move(window: UUID, toWorkspace number: Int) {
+    // `live` tells which windows still exist, so moving into a workspace that holds one counts as
+    // choosing to share it.
+    public mutating func move(window: UUID, toWorkspace number: Int, live: Set<UUID> = []) {
         guard (1...9).contains(number), let index = windows.firstIndex(where: { $0.id == window }) else { return }
+        let category = windows[index].category
         windows[index].workspace = number
+        windows[index].together = windows.contains { $0.id != window && $0.category == category && $0.workspace == number && live.contains($0.id) } ? true : nil
+    }
+
+    // One window per workspace: when windows share one without that being chosen, every window after
+    // the first moves to the next empty workspace of its category.
+    public mutating func separate(live: Set<UUID>) {
+        var seen: Set<String> = []
+        for index in windows.indices where live.contains(windows[index].id) {
+            let key = "\(windows[index].category)|\(windows[index].workspace)"
+            if seen.insert(key).inserted || windows[index].together == true { continue }
+            let free = freeWorkspace(in: windows[index].category, live: live)
+            if free != windows[index].workspace { windows[index].workspace = free; seen.insert("\(windows[index].category)|\(free)") }
+        }
     }
 
     // Puts a category on a screen in the current profile, taking it off any other screen.

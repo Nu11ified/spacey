@@ -848,6 +848,10 @@ if CommandLine.arguments.contains("--rex") {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     print(String(data: try encoder.encode(report), encoding: .utf8)!)
 } else {
+    // Two copies would fight over every window. The first one wins.
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.nu11ified.spacey")
+        .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    if Bundle.main.bundleIdentifier != nil, !others.isEmpty { exit(0) }
     do {
         let controller = try Controller(store: StateStore(url: support.appendingPathComponent("desktop.json")), configURL: configURL)
         app.delegate = controller

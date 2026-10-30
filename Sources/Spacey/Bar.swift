@@ -75,7 +75,7 @@ final class Bar {
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
                                    awake: { [weak self] in self?.onAwake() },
                                    accept: { [weak self] in self?.onAccept($0) }, dismiss: { [weak self] in self?.onDismiss() })
-                let panel = GlassPanel(view, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])
+                let panel = GlassPanel(view, fitsContent: false, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])
                 panel.interactive = false
                 panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) - 1)
                 return panel

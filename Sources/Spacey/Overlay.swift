@@ -10,8 +10,12 @@ final class GlassPanel: NSPanel {
     var onResign: (() -> Void)?
     var interactive = true
 
-    init<Content: View>(_ content: Content, behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]) {
-        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+    // `fitsContent` sizes the panel to the view (inbox, toast, dock). Without it the caller sets the
+    // frame (the bar), and the view fills it.
+    init<Content: View>(_ content: Content, fitsContent: Bool = true,
+                        behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]) {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 100, height: 30), styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .statusBar
         backgroundColor = .clear
@@ -21,9 +25,12 @@ final class GlassPanel: NSPanel {
         isReleasedWhenClosed = false
         collectionBehavior = behavior
         let host = ClickThroughHostingView(rootView: content)
-        host.sizingOptions = [.intrinsicContentSize]
+        host.sizingOptions = fitsContent ? [.intrinsicContentSize] : []
         contentView = host
     }
+
+    // AppKit pushes windows out of the menu bar area. The bar belongs there, so frames stay as set.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     override var canBecomeKey: Bool { interactive }
     override var canBecomeMain: Bool { false }

@@ -1,118 +1,141 @@
+<p align="center"><img src="packaging/logo/logo-256.png" width="128" alt="Spacey"></p>
+
 # Spacey
 
-A keyboard-driven window manager for macOS 26, built around
-[Rex](https://www.superlogical.com/rex). It gives you nine workspaces that
-survive unplugging monitors, and an inbox of the Rex panes that need you.
+A simple, keyboard-first window manager for macOS 26, built for multiple
+monitors and for [Rex](https://www.superlogical.com/rex).
 
-Spacey is early. It works on the author's machine and is covered by a
-regression suite for its core logic, but it hasn't had broad real-world use.
+Spacey is early but in daily use. Its core logic is covered by a regression
+suite.
+
+## Modes
+
+A mode is a named context you fill yourself, such as Build, Research, Chat,
+Write or Music. It spans every screen. Build can hold Rex on the portrait
+monitor, a browser on the wide one, and Slack on the laptop. One key switches
+every screen at once.
+
+- New windows join the mode you're in. Move one with Option-Shift-number.
+- Option-Shift-0 shows a window in every mode, for example to keep chat
+  beside whatever you're doing.
+- Each window remembers its screen separately for every combination of
+  connected displays. Unplug at the end of the day and everything collapses
+  onto the laptop. Plug back in and each window returns to its own screen.
+- Each screen tiles its share of the mode: side by side on landscape screens,
+  stacked on portrait ones. Option-S and Option-Shift-S switch layouts for that
+  screen and mode.
+- Windows in other modes are parked just past a screen corner, so switching
+  is instant, with no minimize animation and no Dock clutter.
+- Fullscreen windows are left alone, and the bar and dock stay out of their
+  Space.
+
+### Apple Intelligence
+
+When a new window opens, Apple's on-device model can suggest which mode it
+belongs in, based only on the app name, the window title and your mode names.
+The suggestion appears in the bar as a chip. Click it to move the window;
+nothing moves on the model's word alone. This needs Apple Intelligence turned
+on in System Settings.
+
+## Bar and dock
+
+The top bar replaces the macOS menu bar, which still slides in when the pointer
+reaches the top edge. On each screen it shows your modes (the active one by
+name, the others by number, with a dot when they hold windows) and the focused
+window. The main screen also shows Rex status, keep-awake, battery and the
+clock. Click the clock for Spacey's menu.
+
+The dock on the main screen shows the modes and the current mode's apps, with
+Rex's waiting count on its icon.
 
 ## Rex
 
-Agents like Claude Code report what they're doing to Rex through the
-[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
-(OSC 7501): working, finished, blocked on a question or permission, or failed.
-Spacey follows the Rex server's event stream and keeps a live picture of every
-pane.
+Agents like Claude Code report their state to Rex through the
+[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status):
+working, finished, blocked on a question or permission, or failed. Spacey
+follows Rex's event stream.
 
-| Shortcut | Action |
+- Option-` opens the inbox: panes that need you, then agents still working.
+  Use the arrow keys and return, or press 1–9, to jump to the exact session, tab and pane.
+- Option-Shift-` jumps straight to the most urgent pane.
+- A toast appears when an agent blocks or fails while you're elsewhere, and the
+  bar shows the waiting count.
+
+## Keys
+
+| Keys | Action |
 | --- | --- |
-| Option-` | Open the Rex inbox: panes that need you, then agents still working |
-| Option-Shift-` | Jump straight to the most urgent pane |
-
-In the inbox, use ↑ ↓ and return, or press 1–9, to jump. Jumping switches to
-the workspace that holds Rex, raises it, and focuses the exact session, tab
-and pane.
-
-- Blocked panes rank first, then failures, then finished work you haven't
-  looked at. Bells and terminal notifications count too.
-- When an agent blocks or fails while Rex is in the background, a toast
-  appears in the corner. Click it to jump.
-- The menu bar shows how many panes are waiting.
-- Looking at a pane in Rex marks it seen.
-
-The Rex shortcuts work even while workspace management is paused, so you can
-use the inbox alongside another window manager.
-
-Spacey never starts a Rex server. It reconnects quietly when Rex restarts.
-To see what the inbox would show, run `swift run Spacey --rex`.
-
-## Workspaces
-
-| Shortcut | Action |
-| --- | --- |
-| Option-1 … 9 | Go to workspace |
-| Option-Shift-1 … 9 | Move the focused window to a workspace |
-| Option-Tab | Cycle windows in the workspace |
-| Option-S / Option-Shift-S | Stack top and bottom / side by side |
+| Option-1 … 9 | Switch mode |
+| Option-Shift-1 … 9 | Move the focused window to a mode |
+| Option-Shift-0 | Show the focused window in every mode (again to undo) |
+| Option-Space | Back to the previous mode |
+| Option-H / J / K / L | Focus left / down / up / right, across screens |
+| Option-Shift-H / J / K / L | Swap with the window in that direction |
+| Option-Control-← / → | Move the focused window to the previous / next screen |
+| Option-Tab | Cycle windows in the mode |
+| Option-F | Focus: show only this window (again to undo) |
+| Option-S / Option-Shift-S | Stack / side by side, on this screen |
+| Option-Q / Option-Shift-Q | Close the window / quit the app |
+| Option-B, Return, R, … | Open an app, or a new window if it's already in front |
+| Option-` / Option-Shift-` | Rex inbox / jump to the most urgent pane |
 | Option-Control-Escape | Pause and put every window back |
 
-Each set of connected displays gets its own profile, which maps workspaces to
-screens and remembers what each screen was showing. Unplug the dock and the
-laptop keeps all nine workspaces. Plug it back in and every screen returns to
-where it was. A window's workspace never changes because a screen
-disappeared. Portrait screens stack windows and landscape screens put them
-side by side, unless you choose otherwise.
+## Config
 
-Hidden windows are parked just past a screen corner instead of minimized, so
-switching is instant, with no genie animation and no Dock clutter. The corner
-is chosen so a parked window never peeks onto a neighbouring monitor.
+`~/.config/spacey/config.json` is optional, and any field you leave out keeps
+its default. Choose **Edit modes…** in the menu to create it, then **Reload
+config**.
 
-Focus modes, from the menu, show all displays, only the focused workspace, or
-only the focused window.
+```json
+{
+  "gap": 10,
+  "dock": true,
+  "modes": [
+    { "name": "Build", "icon": "hammer.fill", "color": "#5B8CFF", "apps": [] },
+    { "name": "Chat", "icon": "bubble.left.and.bubble.right.fill", "color": "#3DDC84",
+      "apps": ["com.tinyspeck.slackmacgap"] }
+  ],
+  "launch": { "b": "app.zen-browser.zen", "return": "com.mitchellh.ghostty", "r": "com.superlogical.rex" }
+}
+```
 
-## Build and run
+`icon` is an SF Symbol name. `apps` lists bundle IDs that always open in that
+mode. Moving a window by hand overrides that. `launch` maps Option-letter (or
+`return`) to an app.
+
+Scripts and other apps can drive Spacey with URLs: `spacey://mode/2`,
+`spacey://move/3`, `spacey://solo`, `spacey://pause`, `spacey://resume`,
+`spacey://reload`, `spacey://inbox`, `spacey://jump`, `spacey://awake`.
+`~/Library/Application Support/Spacey/status.json` reports the current state.
+
+## Build and install
 
 Requires macOS 26 and Swift 6.2 (Xcode or the Command Line Tools).
 
 ```sh
-swift build
-swift run SpaceyChecks        # regression checks
-swift run Spacey --inspect    # read-only: displays, permissions, window count
-bash scripts/build-app        # builds dist/Spacey.app
-open dist/Spacey.app
+swift run SpaceyChecks            # regression checks
+bash scripts/build-app --install  # builds and installs ~/Applications/Spacey.app
 ```
 
-Spacey starts paused. Grant it Accessibility access, then choose **Enable
-management** from its menu. It refuses to enable while AeroSpace is running.
-On first enable, every existing window joins workspace 1. Sort them once with
-Option-Shift-number; the assignments are kept from then on.
-
-## State
-
-`~/Library/Application Support/Spacey/desktop.json` holds workspace
-membership, display profiles, layout choices, focus mode, and a journal of
-the windows Spacey moved offscreen. Writes are atomic with mode 0600. A file
-that can't be read is left untouched.
-
-After a restart, windows are matched back to their workspace by app plus
-accessibility identifier or title, and only when exactly one record matches.
-Two untitled windows of the same app can't be told apart; they're treated as
-new.
+The build is signed with your Apple Development identity when one exists, so
+the Accessibility permission survives rebuilds. Spacey starts managing
+windows as soon as it has that permission. It waits while AeroSpace is
+running.
 
 ## How it works
 
-Spacey uses public APIs only: Accessibility to observe and move windows,
-AppKit for screens and app lifecycle, and Carbon for global shortcuts. It uses
-no private SkyLight calls, needs no SIP changes, and doesn't create Mission
-Control Spaces.
+Spacey uses public APIs only: Accessibility, AppKit, Carbon hotkeys, IOKit
+power assertions and Foundation Models. It uses no private SkyLight calls,
+needs no SIP changes, and doesn't create Mission Control Spaces. Moves briefly
+turn off `AXEnhancedUserInterface` so Chrome and Electron windows don't
+animate.
 
-Moves briefly turn off `AXEnhancedUserInterface`, which otherwise makes Chrome
-and Electron windows animate every move.
+`WorkspaceCore` holds the pure logic (modes, screens, tiling, parking, config
+and the Rex board), and that's what the checks exercise. `Sources/Spacey` is
+the app.
 
-`WorkspaceCore` holds the pure logic (workspace routing, layout, parking,
-and the Rex board) and is what the checks exercise. `Sources/Spacey` is the
-app: the macOS adapter, the Rex bridge, and the overlays.
-
-There's an optional, opt-in command to classify the focused window with
-Apple's on-device model (Foundation Models). It sees only the app identifier
-and a truncated title, and it never moves anything.
-
-## Not done yet
-
-- Nested split trees and floating-window rules
-- Configurable shortcuts and workspace names
-- Real-world testing across many apps and dock/undock cycles
+State lives in `~/Library/Application Support/Spacey/desktop.json`. It's
+written atomically, and a file that can't be read is never overwritten.
 
 ## License
 

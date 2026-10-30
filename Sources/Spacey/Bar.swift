@@ -4,9 +4,9 @@ import Observation
 import SwiftUI
 import WorkspaceCore
 
-// The top bar, one per screen: modes and what's in them on the left, the focused window in the
-// middle, and Rex, suggestions, keep-awake, battery and the clock on the right. The macOS menu bar
-// stays hidden until the pointer touches the top edge, like SketchyBar.
+// The top bar, one per screen. Each screen's bar lists the categories that live on it with their
+// workspaces; the main screen also shows the focused window, Rex, keep-awake, battery and the clock.
+// The macOS menu bar stays hidden until the pointer touches the top edge.
 @MainActor
 final class Bar {
     static let height = 28.0
@@ -19,23 +19,17 @@ final class Bar {
         return NSRect(x: screen.frame.minX, y: screen.visibleFrame.maxY - height, width: screen.frame.width, height: height)
     }
 
-    struct ModeItem: Equatable {
-        var number: Int
-        var mode: SpaceyConfig.Mode
-        var apps: [NSImage]
-    }
-
-    struct Suggestion: Equatable {
-        var window: UUID
-        var mode: Int
-        var name: String
-        var app: String
+    struct Item: Equatable {
+        var category: WorkspaceCore.Category
+        var workspace: Int
+        var used: Set<Int>
+        var focused: Bool
+        var showing: Bool
     }
 
     @MainActor @Observable
     final class Model {
-        var modes: [ModeItem] = []
-        var active = 1
+        var screens: [String: [Item]] = [:]
         var enabled = true
         var solo = false
         var title = ""
@@ -44,17 +38,16 @@ final class Bar {
         var working = 0
         var awake = false
         var battery: (percent: Int, charging: Bool)?
-        var suggestion: Suggestion?
+        var chord: String?
     }
 
     let model = Model()
-    var onSelect: (Int) -> Void = { _ in }
+    var onCategory: (String) -> Void = { _ in }
+    var onWorkspace: (String, Int) -> Void = { _, _ in }
     var onMenu: (NSView) -> Void = { _ in }
     var onRex: () -> Void = {}
     var onAwake: () -> Void = {}
-    var onAccept: (Suggestion) -> Void = { _ in }
-    var onDismiss: () -> Void = {}
-    private var panels: [GlassPanel] = []
+    private var panels: [String: GlassPanel] = [:]
     private var timer: Timer?
 
     init() {
@@ -64,30 +57,31 @@ final class Bar {
         }
     }
 
-    // One bar per screen, flush with the top edge. Fullscreen Spaces don't get one: no
-    // fullScreenAuxiliary. Status items (Rex, battery, clock) only appear on the main screen.
-    func layout() {
-        let screens = NSScreen.screens
-        if panels.count != screens.count {
-            panels.forEach { $0.orderOut(nil) }
-            panels = screens.indices.map { index in
-                let view = BarView(model: model, main: index == 0, notch: screens[index].safeAreaInsets.top > 0, select: { [weak self] in self?.onSelect($0) },
+    // One bar per screen. Fullscreen Spaces don't get one: no fullScreenAuxiliary.
+    func layout(displays: [Display]) {
+        var keep: Set<String> = []
+        for display in displays {
+            guard let screen = MacDesktop.screen(for: display) else { continue }
+            keep.insert(display.id)
+            let panel = panels[display.id] ?? {
+                let view = BarView(model: model, display: display.id, main: screen == NSScreen.screens.first,
+                                   notch: screen.safeAreaInsets.top > 0,
+                                   category: { [weak self] in self?.onCategory($0) },
+                                   workspace: { [weak self] in self?.onWorkspace($0, $1) },
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
-                                   awake: { [weak self] in self?.onAwake() },
-                                   accept: { [weak self] in self?.onAccept($0) }, dismiss: { [weak self] in self?.onDismiss() })
+                                   awake: { [weak self] in self?.onAwake() })
                 let panel = GlassPanel(view, fitsContent: false, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])
                 panel.interactive = false
                 panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) - 1)
+                panels[display.id] = panel
                 return panel
-            }
-        }
-        for (panel, screen) in zip(panels, screens) {
-            panel.setFrame(Self.frame(on: screen), display: true)
+            }()
+            let frame = Self.frame(on: screen)
+            if panel.frame != frame { panel.setFrame(frame, display: true) }
             if !panel.isVisible { panel.alphaValue = 1; panel.orderFrontRegardless() }
         }
+        for id in panels.keys where !keep.contains(id) { panels.removeValue(forKey: id)?.orderOut(nil) }
     }
-
-    func hide() { panels.forEach { $0.fadeOut() } }
 
     private func readBattery() {
         guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
@@ -110,32 +104,33 @@ private struct Chip<Content: View>: View {
         content
             .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 9)
-            .frame(height: 22)
+            .frame(height: 20)
             .background(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.white.opacity(0.08)), in: .capsule)
     }
 }
 
 struct BarView: View {
     var model: Bar.Model
+    var display: String
     var main: Bool
-    // The notch hides whatever is centred, so the title moves next to the modes.
+    // The notch hides whatever is centred, so the title moves next to the categories.
     var notch: Bool
-    var select: (Int) -> Void
+    var category: (String) -> Void
+    var workspace: (String, Int) -> Void
     var menu: (NSView) -> Void
     var rex: () -> Void
     var awake: () -> Void
-    var accept: (Bar.Suggestion) -> Void
-    var dismiss: () -> Void
-    @Namespace private var chip
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(model.modes, id: \.number) { item in modeButton(item) }
+        HStack(spacing: 6) {
+            ForEach(model.screens[display] ?? [], id: \.category.id) { item in categoryChip(item) }
                 .fixedSize()
-            Spacer(minLength: 16).frame(maxWidth: notch ? 16 : .infinity)
-            focused
-                .layoutPriority(-1)
-                .frame(maxWidth: notch ? 260 : 560, alignment: notch ? .leading : .center)
+            if main {
+                Spacer(minLength: 16).frame(maxWidth: notch ? 16 : .infinity)
+                focused
+                    .layoutPriority(-1)
+                    .frame(maxWidth: notch ? 260 : 560, alignment: notch ? .leading : .center)
+            }
             Spacer(minLength: 16)
             HStack(spacing: 8) { status }
                 .fixedSize()
@@ -148,32 +143,44 @@ struct BarView: View {
         .foregroundStyle(.white)
     }
 
-    func modeButton(_ item: Bar.ModeItem) -> some View {
-        let active = item.number == model.active && model.enabled
-        let occupied = !item.apps.isEmpty
-        return Button { select(item.number) } label: {
-            HStack(spacing: 5) {
-                if active {
-                    Image(systemName: item.mode.icon).font(.system(size: 10.5, weight: .bold))
-                    Text(item.mode.name).font(.system(size: 12, weight: .semibold))
-                } else {
-                    Text("\(item.number)").font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .opacity(occupied ? 0.85 : 0.35)
+    // [B] Browser 1 2 3: the letter, the name, and the workspaces that hold windows. The current
+    // workspace is filled. While Option-B waits for a digit, all nine are offered.
+    func categoryChip(_ item: Bar.Item) -> some View {
+        let color = Color(hex: item.category.color)
+        let armed = model.chord == item.category.id
+        let numbers = armed ? Array(1...9) : item.used.union([item.workspace]).sorted()
+        return HStack(spacing: 2) {
+            Button { category(item.category.id) } label: {
+                HStack(spacing: 5) {
+                    Text(item.category.letter.uppercased())
+                        .font(.system(size: 10, weight: .heavy).monospaced())
+                        .frame(width: 15, height: 15)
+                        .background(item.focused ? AnyShapeStyle(color) : AnyShapeStyle(.white.opacity(0.12)), in: .rect(cornerRadius: 4))
+                    Text(item.category.name).font(.system(size: 12, weight: .semibold)).fixedSize()
                 }
+                .contentShape(.rect)
             }
-            .padding(.horizontal, active ? 9 : 6)
-            .frame(minWidth: 22, minHeight: 20)
-            .background {
-                if active { Capsule().fill(Color(hex: item.mode.color)).matchedGeometryEffect(id: "mode", in: chip) }
+            .buttonStyle(PressStyle())
+            .help("\(item.category.name) — Option-\(item.category.letter.uppercased()), then a number")
+            ForEach(numbers, id: \.self) { number in
+                let current = number == item.workspace
+                Button { workspace(item.category.id, number) } label: {
+                    Text("\(number)")
+                        .font(.system(size: 11, weight: current ? .bold : .medium).monospacedDigit())
+                        .frame(width: 17, height: 17)
+                        .background(current ? AnyShapeStyle(color.opacity(item.focused ? 1 : 0.45)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 4))
+                        .opacity(item.used.contains(number) || current ? 1 : 0.4)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(PressStyle())
             }
-            .overlay(alignment: .bottom) {
-                if occupied && !active { Circle().fill(Color(hex: item.mode.color)).frame(width: 3, height: 3).offset(y: 1) }
-            }
-            .contentShape(.rect)
         }
-        .buttonStyle(PressStyle())
-        .help("\(item.mode.name) — Option-\(item.number)")
-        .animation(.easeOut(duration: 0.18), value: model.active)
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(armed ? AnyShapeStyle(color.opacity(0.25)) : AnyShapeStyle(.white.opacity(item.focused ? 0.08 : 0)), in: .rect(cornerRadius: 7))
+        .opacity(item.showing ? 1 : 0.45)
+        .animation(.easeOut(duration: 0.15), value: armed)
+        .animation(.easeOut(duration: 0.15), value: item.workspace)
     }
 
     var focused: some View {
@@ -194,25 +201,6 @@ struct BarView: View {
 
     @ViewBuilder
     var status: some View {
-        if let suggestion = model.suggestion {
-            HStack(spacing: 0) {
-                Button { accept(suggestion) } label: {
-                    Chip(tint: .purple.opacity(0.55)) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "apple.intelligence")
-                            Text("\(suggestion.app) → \(suggestion.name)").lineLimit(1)
-                        }
-                    }
-                }
-                .buttonStyle(PressStyle())
-                .help("Apple Intelligence thinks this window belongs in \(suggestion.name). Click to move it.")
-                Button(action: dismiss) {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).opacity(0.6).frame(width: 18, height: 22)
-                }
-                .buttonStyle(PressStyle())
-            }
-            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-        }
         if model.waiting > 0 || model.working > 0 {
             Button(action: rex) {
                 Chip(tint: model.waiting > 0 ? .orange : nil) {
@@ -246,8 +234,8 @@ struct BarView: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(battery.percent <= 15 && !battery.charging ? AnyShapeStyle(.red) : AnyShapeStyle(.white.opacity(0.7)))
             }
-            MenuAnchor(open: menu)
         }
+        Clock(open: menu)
     }
 
     func batterySymbol(_ percent: Int) -> String {
@@ -262,7 +250,7 @@ struct BarView: View {
 }
 
 // The clock. Clicking it opens Spacey's menu, anchored under it.
-private struct MenuAnchor: View {
+private struct Clock: View {
     var open: (NSView) -> Void
 
     var body: some View {
@@ -272,6 +260,7 @@ private struct MenuAnchor: View {
                 .fixedSize()
         }
         .overlay(ClickTarget(open: open))
+        .help("Spacey menu")
     }
 }
 

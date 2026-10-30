@@ -18,20 +18,22 @@ final class Controller: NSObject, NSApplicationDelegate {
     var axObservers: [pid_t: AXObserver] = [:]
     var hotKeys: [EventHotKeyRef] = []
     var alwaysHotKeys: [EventHotKeyRef] = []
+    var chordKeys: [EventHotKeyRef] = []
+    var chordCategory: String?
+    var chordTimer: DispatchWorkItem?
     var hotKeyHandler: EventHandlerRef?
     var failedFrames: Set<UUID> = []
     var applied: [UUID: Frame] = [:]
     var lastError: String?
     var accessTimer: Timer?
     var awake: IOPMAssertionID?
-    var previousMode: Int?
-    var launchKeys: [UInt32: String] = [:]
+    var previous: (category: String, workspace: Int)?
+    var classifying: Set<UUID> = []
     let rex = RexBridge()
     let overlays = Overlays()
     let dock = Dock()
     let bar = Bar()
     var menu = NSMenu()
-    var suggestionTimer: DispatchWorkItem?
 
     init(store: StateStore, configURL: URL) throws {
         self.store = store
@@ -42,6 +44,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             lastError = "config.json is invalid; using defaults. \(error.localizedDescription)"
         }
         super.init()
+        if let categories = config.categories { state.adopt(categories, displays: MacDesktop.displays()) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -50,10 +53,11 @@ final class Controller: NSObject, NSApplicationDelegate {
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
                                                      forEventClass: AEEventClass(kInternetEventClass),
                                                      andEventID: AEEventID(kAEGetURL))
-        dock.onSelect = { [weak self] in self?.select($0) }
+        dock.onSelect = { [weak self] in self?.focusCategory($0) }
         dock.onApp = { [weak self] in self?.open(app: $0) }
         dock.onAttention = { [weak self] in self?.jumpToMostUrgent() }
-        bar.onSelect = { [weak self] in self?.select($0) }
+        bar.onCategory = { [weak self] in self?.focusCategory($0) }
+        bar.onWorkspace = { [weak self] category, number in self?.selectWorkspace(number, in: category) }
         bar.onMenu = { [weak self] view in
             guard let self else { return }
             self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 6), in: view)
@@ -63,13 +67,6 @@ final class Controller: NSObject, NSApplicationDelegate {
             if self.rex.board.attention.isEmpty { self.toggleInbox() } else { self.jumpToMostUrgent() }
         }
         bar.onAwake = { [weak self] in self?.toggleAwake() }
-        bar.onAccept = { [weak self] suggestion in
-            guard let self else { return }
-            self.bar.model.suggestion = nil
-            self.state.assign(window: suggestion.window, to: suggestion.mode)
-            self.reconcile()
-        }
-        bar.onDismiss = { [weak self] in self?.bar.model.suggestion = nil }
         startRex()
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
@@ -92,8 +89,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 self?.failedFrames.removeAll()
                 self?.applied.removeAll()
-                self?.refreshDock()
-                self?.bar.layout()
+                self?.refresh()
                 self?.schedule(delay: 0.8)
             }
         })
@@ -184,7 +180,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             config = try SpaceyConfig.load(configURL)
             lastError = nil
         } catch { lastError = "config.json is invalid: \(error.localizedDescription)" }
-        if state.mode > config.modes.count { state.mode = 1 }
+        if let categories = config.categories { state.adopt(categories, displays: displays()) }
         if enabled { unregisterHotKeys(); try? registerHotKeys() }
         reconcile()
         refresh()
@@ -195,7 +191,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? encoder.encode(config).write(to: configURL)
+            try? encoder.encode(SpaceyConfig(gap: config.gap, dock: config.dock, categories: state.categories)).write(to: configURL)
         }
         NSWorkspace.shared.open(configURL)
     }
@@ -203,14 +199,18 @@ final class Controller: NSObject, NSApplicationDelegate {
     @objc func quit() { pause(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { if enabled { pause() } }
 
-    // spacey://mode/2, spacey://move/3, spacey://solo, spacey://pause, spacey://resume, spacey://reload, spacey://inbox
+    // spacey://focus/browser, spacey://workspace/browser/2, spacey://move/comms, spacey://solo,
+    // spacey://pause, spacey://resume, spacey://reload, spacey://inbox, spacey://jump, spacey://awake
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: text), url.scheme == "spacey" else { return }
-        let argument = Int(url.lastPathComponent)
+        let parts = url.pathComponents.filter { $0 != "/" }
         switch url.host {
-        case "mode": if let argument { select(argument) }
-        case "move": if let argument { moveFocused(to: argument) }
+        case "focus": if let category = parts.first { focusCategory(category) }
+        case "workspace":
+            if parts.count == 2, let number = Int(parts[1]) { selectWorkspace(number, in: parts[0]) }
+            else if let number = parts.first.flatMap(Int.init), let category = state.focusedCategory { selectWorkspace(number, in: category) }
+        case "move": if let category = parts.first { moveFocused(toCategory: category) }
         case "solo": toggleSolo()
         case "pause": if enabled { pause() }
         case "resume": if !enabled { start() }
@@ -234,15 +234,14 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     var dockHeight: Double { config.dock ? Dock.reservedHeight : 0 }
 
-    // The main display gives up its bottom edge to the dock.
+    // Screens minus the bar at the top and, on the main screen, the dock at the bottom.
     func displays() -> [Display] {
         let main = CGDisplayBounds(CGMainDisplayID())
-        let mainHeight = main.height
         return MacDesktop.displays().map { display in
             var display = display
             // Windows start below the bar (CoreGraphics coordinates grow downward).
             if let screen = MacDesktop.screen(for: display) {
-                let bottom = mainHeight - Bar.frame(on: screen).minY
+                let bottom = main.height - Bar.frame(on: screen).minY
                 let shift = max(0, bottom - display.usableFrame.y)
                 display.usableFrame.y += shift
                 display.usableFrame.height -= shift
@@ -260,10 +259,12 @@ final class Controller: NSObject, NSApplicationDelegate {
         // Never fight a drag or a resize in progress.
         if NSEvent.pressedMouseButtons != 0 { schedule(delay: 0.3); return }
         // A fullscreen window lives in its own Space; leave everything alone until it exits.
-        if MacDesktop.focusedIsFullscreen() { refreshDock(); return }
+        if MacDesktop.focusedIsFullscreen() { refresh(); return }
         let displays = displays()
         guard !displays.isEmpty else { return }
+        state.ensureProfile(displays: displays)
         var current: [UUID: MacDesktop.Window] = [:]
+        var created: [UUID] = []
         for window in MacDesktop.windows() {
             let existing = bindings.first { CFEqual($0.value.element, window.element) }?.key
             let matches = state.windows.filter { record in
@@ -275,28 +276,22 @@ final class Controller: NSObject, NSApplicationDelegate {
             if let index = state.windows.firstIndex(where: { $0.id == id }) {
                 state.windows[index].title = window.title
             } else {
-                // Apps a mode claims open there; anything else joins whatever you're doing now.
+                let category = state.home(for: window.appID)
+                let live = Set(current.keys).union(bindings.keys)
                 state.windows.append(WindowRecord(id: id, appID: window.appID, title: window.title,
-                                                  accessibilityID: window.identifier,
-                                                  mode: config.mode(for: window.appID) ?? state.mode))
-                if !bindings.isEmpty, config.mode(for: window.appID) == nil { suggest(for: id) }
+                                                  accessibilityID: window.identifier, category: category,
+                                                  workspace: state.freeWorkspace(in: category, live: live)))
+                created.append(id)
             }
             current[id] = window
         }
+        let firstPass = bindings.isEmpty
         bindings = current
-        state.applyRules(config)
-        if let focused = MacDesktop.focusedElement(),
-           let id = bindings.first(where: { CFEqual($0.value.element, focused) })?.key {
-            if adoptFocus || state.focusedWindow == nil {
-                state.focusedWindow = id
-                // Focusing a window from another mode (Cmd-Tab, a link, a notification) follows it there.
-                if let mode = state.record(id)?.mode, mode != state.mode, mode <= config.modes.count {
-                    state.mode = mode
-                }
-            }
+        if !firstPass { created.forEach(classify) }
+        if adoptFocus, let id = focusedID, id != state.focusedWindow || state.focusedCategory != state.record(id)?.category {
+            state.follow(id, displays: displays)
         }
         let live = bindings.map { LiveWindow(id: $0.key, frame: $0.value.frame, minimized: $0.value.minimized) }
-        state.settle(displays: displays, live: live)
         do {
             try store.save(state)
             for placement in state.plan(displays: displays, live: live, gap: config.gap) {
@@ -306,7 +301,7 @@ final class Controller: NSObject, NSApplicationDelegate {
                     guard !window.minimized else { continue }
                     let onScreen = displays.contains { $0.frame.contains(x: window.frame.midX, y: window.frame.midY) }
                     if state.parkedByManager[placement.id] != nil && !onScreen { continue }
-                    let home = state.record(placement.id).map { state.display(of: $0, displays: displays, live: window.frame) } ?? displays[0]
+                    let home = state.record(placement.id).flatMap { state.screen(of: $0.category, displays: displays) } ?? displays[0]
                     if state.parkedByManager[placement.id] == nil {
                         state.parkedByManager[placement.id] = window.frame
                         try store.save(state)
@@ -324,7 +319,7 @@ final class Controller: NSObject, NSApplicationDelegate {
                     if applied[placement.id] == target, MacDesktop.near(window.frame, target) { continue }
                     do { try MacDesktop.setFrame(window, target); applied[placement.id] = target }
                     catch {
-                        // Fixed-size windows (System Settings, dialogs) float, centred in their slot.
+                        // Fixed-size windows (System Settings, dialogs) float, centred in their area.
                         failedFrames.insert(placement.id)
                         if let actual = MacDesktop.frame(window.element) {
                             MacDesktop.setPosition(window, Frame(x: target.midX - actual.width / 2, y: max(target.y, target.midY - actual.height / 2),
@@ -340,6 +335,43 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         installAXObservers()
         refresh()
+    }
+
+    // A window from an app no category claims asks Apple Intelligence where it belongs. The answer
+    // moves it (and teaches Spacey the app), but only if the window wasn't moved by hand meanwhile.
+    func classify(_ id: UUID) {
+        guard Advisor.available, let record = state.record(id),
+              !state.categories.contains(where: { $0.apps.contains(record.appID) }), classifying.insert(id).inserted else { return }
+        let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: record.appID)
+            .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? record.appID
+        let categories = state.categories
+        Task {
+            defer { classifying.remove(id) }
+            guard let category = await Advisor.classify(.init(app: app, bundleID: record.appID, title: record.title), into: categories),
+                  let now = state.record(id), now.category == record.category, category != now.category else { return }
+            state.move(window: id, to: category)
+            state.move(window: id, toWorkspace: state.freeWorkspace(in: category, live: Set(bindings.keys).subtracting([id])))
+            state.follow(id, displays: displays())
+            reconcile()
+        }
+    }
+
+    // Asks Apple Intelligence for a fresh set of categories from the windows that are open.
+    @objc func regroup() {
+        let windows = state.windows.filter { bindings[$0.id] != nil }.map { record in
+            Advisor.Window(app: NSRunningApplication.runningApplications(withBundleIdentifier: record.appID).first?.localizedName ?? record.appID,
+                           bundleID: record.appID, title: record.title)
+        }
+        Task {
+            guard let categories = await Advisor.propose(from: windows) else {
+                lastError = "Apple Intelligence couldn't group your windows. \(Advisor.status)"
+                refresh()
+                return
+            }
+            state.adopt(categories, displays: displays())
+            if enabled { unregisterHotKeys(); try? registerHotKeys() }
+            reconcile()
+        }
     }
 
     func installAXObservers() {
@@ -374,38 +406,87 @@ final class Controller: NSObject, NSApplicationDelegate {
         return bindings.first { CFEqual($0.value.element, focused) }?.key
     }
 
-    func select(_ mode: Int) {
-        guard enabled, (1...config.modes.count).contains(mode) else { return }
-        if mode != state.mode { previousMode = state.mode }
-        state.select(mode, count: config.modes.count)
-        let first = state.windows.first { $0.mode == mode && bindings[$0.id] != nil }
-        state.focusedWindow = first?.id
-        reconcile()
-        if let first, let window = bindings[first.id] { MacDesktop.raise(window) }
+    // The screen you're working on: the focused window's, else the one under the pointer.
+    var focusedDisplay: Display? {
+        let displays = displays()
+        if let id = focusedID, let record = state.record(id), let display = state.screen(of: record.category, displays: displays) {
+            return display
+        }
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+        return displays.first { display in screen.map { MacDesktop.screen(for: display) == $0 } ?? false } ?? displays.first
     }
 
-    func moveFocused(to mode: Int) {
-        guard enabled, (0...config.modes.count).contains(mode), let id = focusedID else { return }
-        state.assign(window: id, to: mode)
-        reconcile()
+    func remember() {
+        if let category = state.focusedCategory { previous = (category, state.workspace(of: category)) }
     }
 
-    func moveFocused(by step: Int) {
-        guard enabled, let id = focusedID, let record = state.record(id), let window = bindings[id] else { return }
-        let displays = displays().sorted { $0.frame.x == $1.frame.x ? $0.frame.y < $1.frame.y : $0.frame.x < $1.frame.x }
-        let current = state.display(of: record, displays: displays, live: window.frame)
-        guard let index = displays.firstIndex(where: { $0.id == current.id }), displays.count > 1 else { return }
-        state.move(window: id, to: displays[(index + step + displays.count) % displays.count], displays: displays)
+    // Raises the window in the category's current workspace; an empty category opens its first app.
+    func raiseCurrent(in category: String) {
+        let workspace = state.workspace(of: category)
+        if let record = state.windows.first(where: { $0.category == category && $0.workspace == workspace && bindings[$0.id] != nil }),
+           let window = bindings[record.id] {
+            state.focusedWindow = record.id
+            MacDesktop.raise(window)
+        } else if !state.windows.contains(where: { $0.category == category && bindings[$0.id] != nil }),
+                  let app = state.category(category)?.apps.first(where: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil }) {
+            open(app: app)
+        }
+    }
+
+    func focusCategory(_ category: String) {
+        guard enabled, state.category(category) != nil else { return }
+        remember()
+        state.focus(category, displays: displays())
         reconcile()
-        MacDesktop.raise(window)
+        raiseCurrent(in: category)
+    }
+
+    func selectWorkspace(_ number: Int, in category: String) {
+        guard enabled, state.category(category) != nil, (1...9).contains(number) else { return }
+        remember()
+        state.select(workspace: number, in: category, displays: displays())
+        reconcile()
+        raiseCurrent(in: category)
+    }
+
+    func moveFocused(toCategory category: String) {
+        guard enabled, let id = focusedID, state.category(category) != nil else { return }
+        state.move(window: id, to: category)
+        state.move(window: id, toWorkspace: state.freeWorkspace(in: category, live: Set(bindings.keys).subtracting([id])))
+        state.follow(id, displays: displays())
+        reconcile()
+        if let window = bindings[id] { MacDesktop.raise(window) }
+    }
+
+    func moveFocused(toWorkspace number: Int) {
+        guard enabled, let id = focusedID else { return }
+        state.move(window: id, toWorkspace: number)
+        state.follow(id, displays: displays())
+        reconcile()
+        if let window = bindings[id] { MacDesktop.raise(window) }
+    }
+
+    func placeOnFocusedScreen(_ category: String) {
+        guard enabled, let display = focusedDisplay else { return }
+        state.place(category, on: display, displays: displays())
+        state.focus(category, displays: displays())
+        applied.removeAll()
+        reconcile()
+        raiseCurrent(in: category)
+    }
+
+    @objc func toggleSplit() {
+        guard enabled, let display = focusedDisplay else { return }
+        state.toggleSplit(on: display, displays: displays())
+        applied.removeAll()
+        reconcile()
     }
 
     func setLayout(_ layout: TileLayout) {
-        guard enabled else { return }
-        let displays = displays()
-        let display = focusedID.flatMap { id in state.record(id).map { state.display(of: $0, displays: displays, live: bindings[id]?.frame) } }
-            ?? displays[0]
-        state.setLayout(layout, on: display)
+        guard enabled, let category = state.focusedCategory,
+              let display = state.screen(of: category, displays: displays()) else { return }
+        state.setLayout(layout, display: display, category: category)
         failedFrames.removeAll()
         applied.removeAll()
         reconcile()
@@ -414,75 +495,38 @@ final class Controller: NSObject, NSApplicationDelegate {
     @objc func toggleSolo() {
         state.solo.toggle()
         if state.solo { state.focusedWindow = focusedID ?? state.focusedWindow }
+        applied.removeAll()
         reconcile()
-        refresh()
     }
 
+    // Option-Tab steps through the focused category's workspaces that have windows.
     func cycle() {
-        let records = state.windows.filter { ($0.mode == state.mode || $0.mode == 0) && bindings[$0.id] != nil }
-        guard !records.isEmpty else { return }
-        let index = records.firstIndex(where: { $0.id == state.focusedWindow }) ?? -1
-        let target = records[(index + 1) % records.count]
-        state.focusedWindow = target.id
-        reconcile()
-        if let window = bindings[target.id] { MacDesktop.raise(window) }
+        guard let category = state.focusedCategory else { return }
+        let used = Set(state.windows.filter { $0.category == category && bindings[$0.id] != nil }.map(\.workspace)).sorted()
+        guard !used.isEmpty else { return }
+        let next = used.first { $0 > state.workspace(of: category) } ?? used[0]
+        selectWorkspace(next, in: category)
     }
 
     var visibleWindows: [(UUID, Frame)] {
-        state.windows.compactMap { record in
-            guard record.mode == state.mode || record.mode == 0, state.parkedByManager[record.id] == nil, let window = bindings[record.id],
-                  !window.minimized, let frame = MacDesktop.frame(window.element) else { return nil }
-            return (record.id, frame)
-        }
+        state.plan(displays: displays(), live: bindings.map { LiveWindow(id: $0.key, frame: $0.value.frame, minimized: $0.value.minimized) },
+                   gap: config.gap).compactMap { placement in placement.frame.map { (placement.id, $0) } }
     }
 
     func focus(_ direction: Direction) {
         guard let id = focusedID, let origin = bindings[id].flatMap({ MacDesktop.frame($0.element) }),
               let target = DesktopState.neighbour(of: origin, in: direction, among: visibleWindows.filter { $0.0 != id }),
               let window = bindings[target] else { return }
-        state.focusedWindow = target
+        state.follow(target, displays: displays())
         MacDesktop.raise(window)
+        refresh()
     }
 
     func swap(_ direction: Direction) {
         guard let id = focusedID, let origin = bindings[id].flatMap({ MacDesktop.frame($0.element) }),
               let target = DesktopState.neighbour(of: origin, in: direction, among: visibleWindows.filter { $0.0 != id }) else { return }
-        state.swap(id, target, displays: displays())
+        state.swap(id, target)
         applied.removeAll()
-        reconcile()
-    }
-
-    func launch(_ bundleID: String) {
-        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { MacDesktop.newWindow() } else { open(app: bundleID) }
-    }
-
-    // Asks the on-device model where a window belongs and offers it in the bar. Nothing moves
-    // unless the suggestion is clicked.
-    func suggest(for id: UUID) {
-        guard ModeAdvisor.available, let record = state.record(id) else { return }
-        let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: record.appID)
-            .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? record.appID
-        let modes = config.modes
-        Task {
-            guard let mode = await ModeAdvisor.suggest(app: app, title: record.title, modes: modes),
-                  let current = state.record(id), current.pinned != true, current.mode != mode else { return }
-            withAnimation(.easeOut(duration: 0.18)) {
-                bar.model.suggestion = .init(window: id, mode: mode, name: modes[mode - 1].name, app: app)
-            }
-            suggestionTimer?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated { if self?.bar.model.suggestion?.window == id { self?.bar.model.suggestion = nil } }
-            }
-            suggestionTimer = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
-        }
-    }
-
-    @objc func suggestFocused() { if let id = focusedID { suggest(for: id) } }
-
-    @objc func showEverywhere() {
-        guard let id = focusedID, let record = state.record(id) else { return }
-        state.assign(window: id, to: record.mode == 0 ? state.mode : 0)
         reconcile()
     }
 
@@ -495,19 +539,13 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func open(app bundleID: String) {
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
-            // Prefer this mode's window of the app, so the dock never yanks you into another mode.
-            if let record = state.windows.first(where: { $0.appID == bundleID && $0.mode == state.mode && bindings[$0.id] != nil }),
-               let window = bindings[record.id] {
-                MacDesktop.raise(window)
-            } else {
-                running.activate()
-            }
+            running.activate()
         } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
     }
 
-    // MARK: Menu bar and dock
+    // MARK: Menu, bar and dock
 
     func item(_ title: String, _ action: Selector?, tag: Int = 0, key: String = "", symbol: String? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
@@ -516,21 +554,29 @@ final class Controller: NSObject, NSApplicationDelegate {
         return item
     }
 
+    func header(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
     func refresh() {
         rebuildMenu()
-        refreshDock()
         refreshBar()
+        refreshDock()
         writeStatus()
     }
 
     // ~/Library/Application Support/Spacey/status.json, for scripts and debugging.
     func writeStatus() {
         struct Status: Encodable {
-            var enabled: Bool, trusted: Bool, mode: String, solo: Bool, windows: Int, waiting: Int, error: String?
+            var enabled: Bool, trusted: Bool, profile: String?, category: String?, workspace: Int?, solo: Bool
+            var windows: Int, waiting: Int, intelligence: String, error: String?
         }
-        let mode = config.modes[min(state.mode, config.modes.count) - 1].name
-        let status = Status(enabled: enabled, trusted: MacDesktop.trusted, mode: mode, solo: state.solo,
-                            windows: bindings.count, waiting: rex.board.attention.count, error: lastError)
+        let status = Status(enabled: enabled, trusted: MacDesktop.trusted, profile: state.profile(for: displays())?.name,
+                            category: state.focusedCategory, workspace: state.focusedCategory.map(state.workspace(of:)),
+                            solo: state.solo, windows: bindings.count, waiting: rex.board.attention.count,
+                            intelligence: Advisor.status, error: lastError)
         let url = store.url.deletingLastPathComponent().appendingPathComponent("status.json")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(status) { try? data.write(to: url, options: .atomic) }
@@ -538,19 +584,50 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func rebuildMenu() {
         let menu = NSMenu()
-        for (index, mode) in config.modes.enumerated() {
-            let entry = item(mode.name, #selector(selectMenu(_:)), tag: index + 1, symbol: mode.icon)
-            entry.state = state.mode == index + 1 ? .on : .off
-            entry.toolTip = "Option-\(index + 1)"
-            menu.addItem(entry)
+        let displays = displays()
+        let profile = state.profile(for: displays)
+        menu.addItem(header("Profile: \(profile?.name ?? "—")"))
+        menu.addItem(item("Rename profile…", #selector(renameProfile), symbol: "pencil"))
+        menu.addItem(.separator())
+
+        menu.addItem(header("This screen"))
+        if let display = focusedDisplay {
+            let setup = profile?.screens[display.id]
+            for category in state.categories {
+                let here = setup?.categories.contains(category.id) == true
+                let entry = item("\(category.name)", here ? nil : #selector(placeMenu(_:)), symbol: category.icon)
+                entry.representedObject = category.id
+                entry.state = here ? .on : .off
+                entry.toolTip = here ? "On this screen" : "Move here (Option-Control-\(category.letter.uppercased()))"
+                menu.addItem(entry)
+            }
+            let split = item((setup?.split ?? true) ? "Show one category at a time" : "Show categories side by side",
+                             #selector(toggleSplit), symbol: "rectangle.split.2x1")
+            menu.addItem(split)
         }
         menu.addItem(.separator())
+
+        menu.addItem(header("Categories"))
+        for category in state.categories {
+            let count = state.windows.filter { $0.category == category.id && bindings[$0.id] != nil }.count
+            let entry = item("\(category.letter.uppercased())  \(category.name) — \(count) window\(count == 1 ? "" : "s")",
+                             #selector(focusMenu(_:)), symbol: category.icon)
+            entry.representedObject = category.id
+            entry.state = state.focusedCategory == category.id ? .on : .off
+            menu.addItem(entry)
+        }
+        menu.addItem(item("New category…", #selector(newCategory), symbol: "plus"))
+        if let focused = state.category(state.focusedCategory) {
+            menu.addItem(item("Rename \(focused.name)…", #selector(renameCategory), symbol: "character.cursor.ibeam"))
+        }
+        let ai = item(Advisor.available ? "Regroup with Apple Intelligence" : "Apple Intelligence: \(Advisor.status)",
+                      Advisor.available ? #selector(regroup) : nil, symbol: "apple.intelligence")
+        menu.addItem(ai)
+        menu.addItem(.separator())
+
         let solo = item("Focus on one window", #selector(toggleSolo), symbol: "scope")
         solo.state = state.solo ? .on : .off
         menu.addItem(solo)
-        let everywhere = item("Show this window in every mode", #selector(showEverywhere), symbol: "pin")
-        everywhere.state = focusedID.flatMap { state.record($0) }?.mode == 0 ? .on : .off
-        menu.addItem(everywhere)
         menu.addItem(item("Side by side", #selector(horizontal), symbol: "rectangle.split.2x1"))
         menu.addItem(item("Stacked", #selector(vertical), symbol: "rectangle.split.1x2"))
         menu.addItem(.separator())
@@ -558,7 +635,6 @@ final class Controller: NSObject, NSApplicationDelegate {
         for (index, pane) in rex.board.attention.prefix(5).enumerated() {
             menu.addItem(item("\(pane.name) — \(pane.reason)", #selector(jumpMenu(_:)), tag: index, symbol: "arrow.turn.down.right"))
         }
-        menu.addItem(.separator())
         let caffeinate = item("Keep Mac awake", #selector(toggleAwake), symbol: "cup.and.saucer")
         caffeinate.state = awake == nil ? .off : .on
         menu.addItem(caffeinate)
@@ -568,11 +644,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             menu.addItem(item("Restore windows from last session", #selector(recover)))
         }
         if !MacDesktop.trusted { menu.addItem(item("Grant Accessibility access…", #selector(requestAccess))) }
-        let ai = item("Apple Intelligence: \(ModeAdvisor.status)", ModeAdvisor.available ? #selector(suggestFocused) : nil,
-                      symbol: "apple.intelligence")
-        if ModeAdvisor.available { ai.title = "Suggest a mode for this window" }
-        menu.addItem(ai)
-        menu.addItem(item("Edit modes…", #selector(openConfig)))
+        menu.addItem(item("Edit config…", #selector(openConfig)))
         menu.addItem(item("Reload config", #selector(reloadConfig)))
         if !failedFrames.isEmpty { menu.addItem(item("Retile fixed-size windows", #selector(retry))) }
         if let error = lastError {
@@ -584,62 +656,96 @@ final class Controller: NSObject, NSApplicationDelegate {
         menu.addItem(item("Quit Spacey", #selector(quit), key: "q"))
         statusItem.menu = menu
         self.menu = menu
-
-        // Like a focus mode: the mode's symbol and name, plus how many Rex panes are waiting.
-        let mode = config.modes[min(state.mode, config.modes.count) - 1]
-        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        let title = NSMutableAttributedString()
-        if let image = NSImage(systemSymbolName: enabled ? mode.icon : "pause.circle", accessibilityDescription: mode.name)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold)) {
-            let attachment = NSTextAttachment()
-            attachment.image = image
-            title.append(NSAttributedString(attachment: attachment))
-        }
-        title.append(NSAttributedString(string: " " + (enabled ? mode.name : "Paused") + (state.solo && enabled ? " · Focus" : ""),
-                                        attributes: [.font: font, .baselineOffset: 0.5]))
-        let waiting = rex.board.attention.count
-        if waiting > 0 {
-            title.append(NSAttributedString(string: "  ● \(waiting)", attributes: [
-                .foregroundColor: NSColor.systemOrange, .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)]))
-        }
-        statusItem.button?.attributedTitle = title
+        statusItem.button?.image = NSImage(systemSymbolName: enabled ? "sparkle" : "pause.circle", accessibilityDescription: "Spacey")
     }
 
     func refreshBar() {
-        let model = bar.model
-        model.modes = config.modes.enumerated().map { index, mode in
-            var seen: Set<String> = []
-            let icons = state.windows.filter { $0.mode == index + 1 && bindings[$0.id] != nil && seen.insert($0.appID).inserted }
-                .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.appID) }
-                .map { NSWorkspace.shared.icon(forFile: $0.path) }
-            return Bar.ModeItem(number: index + 1, mode: mode, apps: icons)
+        let displays = displays()
+        let live = Set(bindings.keys)
+        var screens: [String: [Bar.Item]] = [:]
+        for display in displays {
+            guard let setup = state.profile(for: displays)?.screens[display.id] else { continue }
+            let showing = Set(state.visible(on: display, displays: displays))
+            screens[display.id] = setup.categories.compactMap { id in
+                guard let category = state.category(id) else { return nil }
+                let used = Set(state.windows.filter { $0.category == id && live.contains($0.id) }.map(\.workspace))
+                return Bar.Item(category: category, workspace: state.workspace(of: id), used: used,
+                                focused: state.focusedCategory == id && enabled, showing: showing.contains(id))
+            }
         }
-        model.active = min(state.mode, config.modes.count)
+        let model = bar.model
+        model.screens = screens
         model.enabled = enabled
         model.solo = state.solo
         model.waiting = rex.board.attention.count
         model.working = rex.board.working.count
         model.awake = awake != nil
+        model.chord = chordCategory
         titleChanged()
-        bar.layout()
+        bar.layout(displays: displays)
     }
 
     func refreshDock() {
         guard config.dock else { dock.hide(); return }
-        let active = min(state.mode, config.modes.count)
-        let claimed = config.modes[active - 1].apps
-        let extras = state.windows.filter { $0.mode == active && bindings[$0.id] != nil && !claimed.contains($0.appID) }.map(\.appID)
+        let category = state.category(state.focusedCategory) ?? state.categories[0]
+        let running = state.windows.filter { $0.category == category.id && bindings[$0.id] != nil }.map(\.appID)
         var seen: Set<String> = []
-        let apps = (claimed + extras).filter { seen.insert($0).inserted }.compactMap { id -> Dock.App? in
+        let apps = (running + category.apps).filter { seen.insert($0).inserted }.compactMap { id -> Dock.App? in
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
-            let running = !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
             return Dock.App(id: id, name: FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: ""),
-                            icon: NSWorkspace.shared.icon(forFile: url.path), running: running,
+                            icon: NSWorkspace.shared.icon(forFile: url.path),
+                            running: !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty,
                             badge: id == RexBridge.bundleID ? rex.board.attention.count : 0)
-        }
-        dock.update(modes: config.modes, active: active, apps: apps, waiting: rex.board.attention.count,
+        }.prefix(10)
+        dock.update(categories: state.categories, active: category.id, apps: Array(apps), waiting: rex.board.attention.count,
                     hidden: enabled && MacDesktop.focusedIsFullscreen())
     }
+
+    func ask(_ title: String, value: String) -> String? {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = title
+        let field = NSTextField(string: value)
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    @objc func renameProfile() {
+        let key = DesktopState.topologyKey(displays())
+        guard let name = ask("Name this monitor setup", value: state.profiles[key]?.name ?? "") else { return }
+        state.profiles[key]?.name = name
+        try? store.save(state)
+        refresh()
+    }
+
+    @objc func newCategory() {
+        guard let name = ask("New category", value: "") else { return }
+        guard let category = state.addCategory(named: name, color: Advisor.colors[state.categories.count % Advisor.colors.count]) else {
+            lastError = "Couldn't add \(name): the name is taken or no letter is free."
+            refresh()
+            return
+        }
+        state.ensureProfile(displays: displays())
+        if enabled { unregisterHotKeys(); try? registerHotKeys() }
+        focusCategory(category.id)
+    }
+
+    @objc func renameCategory() {
+        guard let id = state.focusedCategory, let index = state.categories.firstIndex(where: { $0.id == id }),
+              let name = ask("Rename \(state.categories[index].name)", value: state.categories[index].name) else { return }
+        state.categories[index].name = name
+        try? store.save(state)
+        refresh()
+    }
+
+    @objc func placeMenu(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { placeOnFocusedScreen(id) } }
+    @objc func focusMenu(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { focusCategory(id) } }
 
     // Like `caffeinate -di`: no idle sleep for the display or the Mac until turned off.
     // Closing the lid still sleeps; macOS doesn't let an app prevent that.
@@ -657,7 +763,6 @@ final class Controller: NSObject, NSApplicationDelegate {
     }
 
     @objc func requestAccess() { MacDesktop.requestAccess() }
-    @objc func selectMenu(_ sender: NSMenuItem) { select(sender.tag) }
     @objc func horizontal() { setLayout(.horizontal) }
     @objc func vertical() { setLayout(.vertical) }
     @objc func retry() { failedFrames.removeAll(); applied.removeAll(); reconcile() }
@@ -690,7 +795,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     func jump(to pane: RexPane) {
         overlays.dismissToast()
         if enabled, let (id, window) = bindings.first(where: { $0.value.appID == RexBridge.bundleID }) {
-            if let mode = state.record(id)?.mode, mode != state.mode { select(mode) }
+            state.follow(id, displays: displays())
+            reconcile()
             MacDesktop.raise(window)
         } else {
             NSRunningApplication.runningApplications(withBundleIdentifier: RexBridge.bundleID).first?.activate()
@@ -714,17 +820,20 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     // MARK: Keys
 
+    static let letterCodes: [Character: UInt32] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+                                                   "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31,
+                                                   "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46]
+    static let digitCodes: [UInt32] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+
     func handleKey(_ id: UInt32) {
         switch id {
-        case 1...9: select(Int(id))
-        case 100...109: moveFocused(to: Int(id - 100))
+        case 1...9: if let category = state.focusedCategory { selectWorkspace(Int(id), in: category) }
+        case 101...109: moveFocused(toWorkspace: Int(id - 100))
         case 200: horizontal()
         case 201: vertical()
         case 202: pause()
         case 203: cycle()
         case 204: toggleSolo()
-        case 205: moveFocused(by: -1)
-        case 206: moveFocused(by: 1)
         case 207: focus(.left)
         case 208: focus(.down)
         case 209: focus(.up)
@@ -735,12 +844,44 @@ final class Controller: NSObject, NSApplicationDelegate {
         case 214: swap(.right)
         case 215: if let id = focusedID, let window = bindings[id] { MacDesktop.close(window) }
         case 216: NSWorkspace.shared.frontmostApplication?.terminate()
-        case 217: if let previousMode { select(previousMode) }
-        case 400...499: if let app = launchKeys[id] { launch(app) }
+        case 217: if let previous { selectWorkspace(previous.workspace, in: previous.category) }
+        case 218: toggleSplit()
         case 300: toggleInbox()
         case 301: jumpToMostUrgent()
+        case 500..<600:
+            let index = Int(id - 500)
+            guard state.categories.indices.contains(index) else { return }
+            focusCategory(state.categories[index].id)
+            armChord(state.categories[index].id)
+        case 600..<700:
+            let index = Int(id - 600)
+            if state.categories.indices.contains(index) { moveFocused(toCategory: state.categories[index].id) }
+        case 700..<800:
+            let index = Int(id - 700)
+            if state.categories.indices.contains(index) { placeOnFocusedScreen(state.categories[index].id) }
+        case 801...809:
+            if let category = chordCategory { selectWorkspace(Int(id - 800), in: category) }
+            endChord()
         default: break
         }
+    }
+
+    // After Option-<letter>, a bare digit within 1.2 seconds picks that category's workspace.
+    func armChord(_ category: String) {
+        endChord()
+        chordCategory = category
+        chordKeys = Self.digitCodes.enumerated().compactMap { index, code in register(id: UInt32(801 + index), key: code, modifiers: 0) }
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.endChord() } }
+        chordTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        refreshBar()
+    }
+
+    func endChord() {
+        chordTimer?.cancel()
+        chordKeys.forEach { UnregisterEventHotKey($0) }
+        chordKeys.removeAll()
+        if chordCategory != nil { chordCategory = nil; refreshBar() }
     }
 
     func installHotKeyHandler() {
@@ -770,40 +911,33 @@ final class Controller: NSObject, NSApplicationDelegate {
         installHotKeyHandler()
         guard hotKeyHandler != nil else { throw DesktopError.window("Keyboard handler registration failed.") }
         let option = UInt32(optionKey), shift = UInt32(optionKey | shiftKey), control = UInt32(optionKey | controlKey)
-        let keys: [UInt32] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
         var requests: [(UInt32, UInt32, UInt32)] = []
-        for (index, key) in keys.enumerated() {
-            requests.append((UInt32(index + 1), key, option))
-            requests.append((UInt32(index + 101), key, shift))
+        for (index, code) in Self.digitCodes.enumerated() {
+            requests.append((UInt32(index + 1), code, option))
+            requests.append((UInt32(index + 101), code, shift))
         }
-        requests += [(100, 29, shift), (200, 1, shift), (201, 1, option), (202, 53, control), (203, 48, option),
-                     (204, 3, option), (205, 123, control), (206, 124, control),
+        requests += [(200, 1, shift), (201, 1, option), (202, 53, control), (203, 48, option), (204, 3, option),
                      (207, 4, option), (208, 38, option), (209, 40, option), (210, 37, option),
                      (211, 4, shift), (212, 38, shift), (213, 40, shift), (214, 37, shift),
-                     (215, 12, option), (216, 12, shift), (217, 49, option)]
-        let codes: [String: UInt32] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
-                                       "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32,
-                                       "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46, "return": 36]
-        launchKeys = [:]
-        for (index, (key, app)) in config.launch.sorted(by: { $0.key < $1.key }).enumerated() {
-            guard let code = codes[key.lowercased()] else { continue }
-            launchKeys[UInt32(400 + index)] = app
-            requests.append((UInt32(400 + index), code, option))
+                     (215, 12, option), (216, 12, shift), (217, 49, option), (218, 1, control)]
+        for (index, category) in state.categories.enumerated().prefix(99) {
+            guard let letter = category.letter.lowercased().first, let code = Self.letterCodes[letter] else { continue }
+            requests += [(UInt32(500 + index), code, option), (UInt32(600 + index), code, shift), (UInt32(700 + index), code, control)]
         }
         var refused: [UInt32] = []
         for (id, key, modifiers) in requests {
             if let reference = register(id: id, key: key, modifiers: modifiers) { hotKeys.append(reference) } else { refused.append(id) }
         }
-        // Mode switching is the one thing that must work; the rest degrade to the menu.
-        if refused.contains(where: { (1...9).contains($0) }) {
+        if refused.contains(where: { (500..<600).contains($0) }) {
             unregisterHotKeys()
-            throw DesktopError.window("Another app owns Option-number. Quit it and choose Resume.")
+            throw DesktopError.window("Another app owns Option-letter keys. Quit it and choose Resume.")
         }
         if !refused.isEmpty { lastError = "\(refused.count) shortcut(s) are taken by another app." }
     }
 
     // Window keys only; the Rex inbox keys stay live while paused.
     func unregisterHotKeys() {
+        endChord()
         hotKeys.forEach { UnregisterEventHotKey($0) }
         hotKeys.removeAll()
     }
@@ -828,23 +962,24 @@ if CommandLine.arguments.contains("--rex") {
     }
     app.run()
 } else if CommandLine.arguments.contains("--inspect") {
-    // Read-only: displays, permission, config, and each managed window's app, mode and frame (no titles).
-    struct Item: Encodable { var app: String; var mode: Int?; var frame: Frame; var minimized: Bool }
+    // Read-only: displays, permission, profiles, and each window's app, category, workspace and frame (no titles).
+    struct Item: Encodable { var app: String; var category: String?; var workspace: Int?; var frame: Frame; var minimized: Bool }
     struct Inspection: Encodable {
         var accessibility: Bool
         var displays: [Display]
-        var modes: [String]
-        var activeMode: Int?
+        var categories: [String]
+        var profile: Profile?
+        var workspaces: [String: Int]
         var windows: [Item]
     }
-    let state = try? StateStore(url: support.appendingPathComponent("desktop.json")).load()
-    let config = (try? SpaceyConfig.load(configURL)) ?? .standard
+    let state = (try? StateStore(url: support.appendingPathComponent("desktop.json")).load()) ?? DesktopState()
+    let displays = MacDesktop.displays()
     let windows = MacDesktop.windows().map { window in
-        let record = state?.windows.first { $0.appID == window.appID && (!window.title.isEmpty && $0.title == window.title) }
-        return Item(app: window.appID, mode: record?.mode, frame: window.frame, minimized: window.minimized)
+        let record = state.windows.first { $0.appID == window.appID && (!window.title.isEmpty && $0.title == window.title) }
+        return Item(app: window.appID, category: record?.category, workspace: record?.workspace, frame: window.frame, minimized: window.minimized)
     }
-    let report = Inspection(accessibility: MacDesktop.trusted, displays: MacDesktop.displays(),
-                            modes: config.modes.map(\.name), activeMode: state?.mode, windows: windows)
+    let report = Inspection(accessibility: MacDesktop.trusted, displays: displays, categories: state.categories.map(\.id),
+                            profile: state.profile(for: displays), workspaces: state.workspaces, windows: windows)
     let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     print(String(data: try encoder.encode(report), encoding: .utf8)!)
 } else {

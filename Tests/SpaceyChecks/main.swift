@@ -12,147 +12,153 @@ func expect(_ condition: @autoclosure () throws -> Bool, _ message: String = #fu
     if try !condition() { throw CheckFailure(message: message) }
 }
 
-func center(of display: Display) -> Frame {
-    Frame(x: display.frame.midX - 200, y: display.frame.midY - 150, width: 400, height: 300)
+func live(_ state: DesktopState, minimized: Set<UUID> = []) -> [LiveWindow] {
+    state.windows.map { LiveWindow(id: $0.id, frame: Frame(x: 0, y: 0, width: 400, height: 300), minimized: minimized.contains($0.id)) }
 }
 
-// Three Build windows, one per screen, and one Chat window on the laptop.
-func deskState() -> (DesktopState, [LiveWindow]) {
+func frame(_ id: UUID, _ plan: [Placement]) -> Frame? { plan.first { $0.id == id }?.frame }
+func hidden(_ id: UUID, _ plan: [Placement]) -> Bool { plan.first { $0.id == id }?.hidden == true }
+
+// The setup from the request: Comms above Browser on the portrait monitor, Agents on the wide one.
+func deskState() -> (DesktopState, slack: UUID, zen1: UUID, zen2: UUID, rex: UUID) {
     var state = DesktopState()
-    state.windows = [
-        WindowRecord(appID: "rex", title: "Rex", mode: 1),
-        WindowRecord(appID: "code", title: "Editor", mode: 1),
-        WindowRecord(appID: "zen", title: "Docs", mode: 1),
-        WindowRecord(appID: "slack", title: "Slack", mode: 3),
-    ]
-    let live = [LiveWindow(id: state.windows[0].id, frame: center(of: portrait)),
-                LiveWindow(id: state.windows[1].id, frame: center(of: landscape)),
-                LiveWindow(id: state.windows[2].id, frame: center(of: laptop)),
-                LiveWindow(id: state.windows[3].id, frame: center(of: laptop))]
-    state.settle(displays: desk, live: live)
-    return (state, live)
-}
-
-func screen(of id: UUID, in placements: [Placement], displays: [Display]) -> String? {
-    guard let frame = placements.first(where: { $0.id == id })?.frame else { return nil }
-    return displays.first { $0.frame.contains(x: frame.midX, y: frame.midY) }?.id
+    state.profiles[DesktopState.topologyKey(desk)] = Profile(name: "Desk", screens: [
+        "landscape": ScreenSetup(categories: ["agents"], split: true),
+        "portrait": ScreenSetup(categories: ["comms", "browser"], split: true),
+        "laptop": ScreenSetup(categories: ["notes", "media"], split: true),
+    ])
+    let slack = WindowRecord(appID: "com.tinyspeck.slackmacgap", title: "Slack", category: "comms", workspace: 1)
+    let zen1 = WindowRecord(appID: "app.zen-browser.zen", title: "Docs", category: "browser", workspace: 1)
+    let zen2 = WindowRecord(appID: "app.zen-browser.zen", title: "PR", category: "browser", workspace: 2)
+    let rex = WindowRecord(appID: "com.superlogical.rex", title: "Rex", category: "agents", workspace: 1)
+    state.windows = [slack, zen1, zen2, rex]
+    return (state, slack.id, zen1.id, zen2.id, rex.id)
 }
 
 let checks: [(String, () throws -> Void)] = [
-    ("A mode spans every screen", {
-        let (state, live) = deskState()
-        let plan = state.plan(displays: desk, live: live)
-        try expect(screen(of: state.windows[0].id, in: plan, displays: desk) == "portrait")
-        try expect(screen(of: state.windows[1].id, in: plan, displays: desk) == "landscape")
-        try expect(screen(of: state.windows[2].id, in: plan, displays: desk) == "laptop")
-        try expect(plan.first { $0.id == state.windows[3].id }?.hidden == true)
+    ("Comms over Browser on the vertical monitor, each on its own workspace", {
+        var (state, slack, zen1, zen2, rex) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
+        let plan = state.plan(displays: desk, live: live(state))
+        let top = try frame(slack, plan).unwrap(), bottom = try frame(zen2, plan).unwrap()
+        try expect(portrait.frame.contains(x: top.midX, y: top.midY) && portrait.frame.contains(x: bottom.midX, y: bottom.midY))
+        try expect(top.y + top.height < bottom.y && abs(top.width - bottom.width) < 1)
+        try expect(hidden(zen1, plan))
+        let agents = try frame(rex, plan).unwrap()
+        try expect(landscape.frame.contains(x: agents.midX, y: agents.midY))
     }),
-    ("Unplugging collapses onto the laptop and replugging restores each screen", {
-        var (state, live) = deskState()
-        let memberships = state.windows.map(\.mode)
-        state.settle(displays: [laptop], live: live)
-        let alone = state.plan(displays: [laptop], live: live)
-        try expect(alone.filter { !$0.hidden }.count == 3)
-        try expect(alone.compactMap(\.frame).allSatisfy { laptop.frame.contains(x: $0.midX, y: $0.midY) })
-        // Back at the desk, windows are wherever the laptop-only tiling left them.
-        let tiled = alone.compactMap { p in p.frame.map { LiveWindow(id: p.id, frame: $0) } }
-        state.settle(displays: desk, live: tiled)
-        let back = state.plan(displays: desk, live: tiled)
-        try expect(screen(of: state.windows[0].id, in: back, displays: desk) == "portrait")
-        try expect(screen(of: state.windows[1].id, in: back, displays: desk) == "landscape")
-        try expect(state.windows.map(\.mode) == memberships)
+    ("An empty category gives its share of the screen away", {
+        var (state, slack, _, _, _) = deskState()
+        state.select(workspace: 5, in: "browser", displays: desk)
+        let plan = state.plan(displays: desk, live: live(state))
+        try expect(try frame(slack, plan).unwrap().height > portrait.frame.height * 0.9)
     }),
-    ("Switching modes changes every screen at once", {
-        var (state, live) = deskState()
-        state.select(3, count: 5)
-        let plan = state.plan(displays: desk, live: live)
-        try expect(plan.filter { !$0.hidden }.map(\.id) == [state.windows[3].id])
+    ("Picking a workspace changes only that category", {
+        var (state, slack, zen1, zen2, _) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
+        state.select(workspace: 1, in: "browser", displays: desk)
+        let plan = state.plan(displays: desk, live: live(state))
+        try expect(!hidden(slack, plan) && !hidden(zen1, plan) && hidden(zen2, plan))
+        try expect(state.workspace(of: "comms") == 1 && state.focusedCategory == "browser")
     }),
-    ("Portrait stacks and landscape sits side by side", {
+    ("A new window takes its category's next empty workspace", {
+        let (state, _, _, _, _) = deskState()
+        try expect(state.freeWorkspace(in: "browser", live: Set(state.windows.map(\.id))) == 3)
+        try expect(state.freeWorkspace(in: "notes", live: Set(state.windows.map(\.id))) == 1)
+        try expect(state.home(for: "com.tinyspeck.slackmacgap") == "comms")
+    }),
+    ("Focusing a window brings its workspace forward", {
+        var (state, _, _, zen2, _) = deskState()
+        state.follow(zen2, displays: desk)
+        try expect(state.workspace(of: "browser") == 2 && state.focusedCategory == "browser")
+    }),
+    ("Putting a category on a screen takes it off the others", {
+        var (state, _, _, _, _) = deskState()
+        state.place("notes", on: portrait, displays: desk)
+        let profile = state.profile(for: desk)!
+        try expect(profile.screens["portrait"]?.categories == ["comms", "browser", "notes"])
+        try expect(profile.screens["laptop"]?.categories == ["media"])
+    }),
+    ("Each monitor setup keeps its own profile", {
+        var (state, slack, _, _, _) = deskState()
+        state.ensureProfile(displays: [laptop])
+        let alone = state.profile(for: [laptop])!
+        try expect(alone.screens["laptop"]?.categories.count == state.categories.count)
+        try expect(alone.screens["laptop"]?.split == false)
+        state.focus("comms", displays: [laptop])
+        let plan = state.plan(displays: [laptop], live: live(state))
+        try expect(plan.filter { !$0.hidden }.map(\.id) == [slack])
+        state.ensureProfile(displays: desk)
+        try expect(state.profile(for: desk)?.screens["portrait"]?.categories == ["comms", "browser"])
+    }),
+    ("Switching a screen to one at a time shows the focused category", {
+        var (state, slack, _, zen2, _) = deskState()
+        state.toggleSplit(on: portrait, displays: desk)
+        state.select(workspace: 2, in: "browser", displays: desk)
+        var plan = state.plan(displays: desk, live: live(state))
+        try expect(!hidden(zen2, plan) && hidden(slack, plan))
+        let full = try frame(zen2, plan).unwrap()
+        try expect(full.height > portrait.frame.height * 0.9)
+        state.focus("comms", displays: desk)
+        plan = state.plan(displays: desk, live: live(state))
+        try expect(!hidden(slack, plan) && hidden(zen2, plan))
+    }),
+    ("Moving a window teaches Spacey where its app belongs", {
+        var (state, _, zen1, _, _) = deskState()
+        state.move(window: zen1, to: "notes")
+        try expect(state.home(for: "app.zen-browser.zen") == "notes")
+        try expect(!state.category("browser")!.apps.contains("app.zen-browser.zen"))
+    }),
+    ("Swapping exchanges places across areas", {
+        var (state, slack, zen1, _, _) = deskState()
+        state.swap(slack, zen1)
+        try expect(state.record(slack)?.category == "browser" && state.record(zen1)?.category == "comms")
+    }),
+    ("Apple Intelligence's categories re-sort windows and keep the screens", {
+        var (state, slack, _, _, rex) = deskState()
+        var proposal = DesktopState()
+        proposal.categories = []
+        proposal.addCategory(named: "Work", apps: ["com.superlogical.rex", "com.tinyspeck.slackmacgap"])
+        proposal.addCategory(named: "Web", apps: ["app.zen-browser.zen"])
+        state.adopt(proposal.categories, displays: desk)
+        try expect(state.record(slack)?.category == "work" && state.record(rex)?.category == "work")
+        let placed = state.profile(for: desk)!.screens.values.flatMap(\.categories).sorted()
+        try expect(placed == ["web", "work"])
+    }),
+    ("Category letters avoid the ones Spacey uses", {
         var state = DesktopState()
-        state.windows = (0..<2).map { WindowRecord(appID: "t", title: "\($0)", mode: 1) }
-        let up = state.windows.map { LiveWindow(id: $0.id, frame: center(of: portrait)) }
-        state.settle(displays: [portrait], live: up)
-        let stacked = state.plan(displays: [portrait], live: up).compactMap(\.frame)
-        try expect(stacked[0].x == stacked[1].x && stacked[0].y + stacked[0].height < stacked[1].y)
-        var wide = DesktopState()
-        wide.windows = state.windows.map { WindowRecord(id: $0.id, appID: "t", title: $0.title, mode: 1) }
-        let across = wide.windows.map { LiveWindow(id: $0.id, frame: center(of: landscape)) }
-        wide.settle(displays: [landscape], live: across)
-        let side = wide.plan(displays: [landscape], live: across).compactMap(\.frame)
-        try expect(side[0].y == side[1].y && side[0].x + side[0].width < side[1].x)
+        let added = state.addCategory(named: "Focus")
+        try expect(added?.letter == "o")
+        try expect(state.addCategory(named: "Focus") == nil)
     }),
-    ("Dragging a window to another screen sticks", {
-        var (state, live) = deskState()
-        var moved = live
-        moved[2].frame = center(of: landscape)
-        state.settle(displays: desk, live: moved)
-        try expect(screen(of: state.windows[2].id, in: state.plan(displays: desk, live: moved), displays: desk) == "landscape")
-    }),
-    ("Parked windows don't count as drags", {
-        var (state, live) = deskState()
-        var parked = live
-        parked[3].frame = DesktopState.parkingFrame(for: live[3].frame, on: laptop, among: desk)
-        state.parkedByManager[state.windows[3].id] = live[3].frame
-        state.settle(displays: desk, live: parked)
-        try expect(state.windows[3].displays[DesktopState.topologyKey(desk)] == "laptop")
-    }),
-    ("A chosen layout survives reconnecting", {
-        var (state, live) = deskState()
-        state.setLayout(.vertical, on: landscape)
-        state.settle(displays: [laptop], live: live)
-        state.settle(displays: desk, live: live)
-        try expect(state.layout(on: landscape) == .vertical)
-        try expect(state.layout(on: portrait) == .vertical && state.layout(on: laptop) == .horizontal)
-    }),
-    ("Focus shows only the focused window and keeps everything else", {
-        var (state, live) = deskState()
-        let modes = state.windows.map(\.mode)
+    ("Focus shows only the focused window, full screen", {
+        var (state, _, _, _, rex) = deskState()
         state.solo = true
-        state.focusedWindow = state.windows[1].id
-        try expect(state.plan(displays: desk, live: live).filter { !$0.hidden }.map(\.id) == [state.windows[1].id])
-        try expect(state.windows.map(\.mode) == modes)
+        state.focusedWindow = rex
+        let plan = state.plan(displays: desk, live: live(state))
+        try expect(plan.filter { !$0.hidden }.map(\.id) == [rex])
+        try expect(try frame(rex, plan).unwrap().width > landscape.frame.width * 0.9)
     }),
     ("User-minimized windows stay minimized", {
-        var (state, live) = deskState()
-        live[0].minimized = true
-        try expect(state.plan(displays: desk, live: live).first { $0.id == state.windows[0].id }?.hidden == true)
-        state.minimizedByManager.insert(state.windows[0].id)
-        try expect(state.plan(displays: desk, live: live).first { $0.id == state.windows[0].id }?.hidden == false)
-    }),
-    ("Apps open in the mode that claims them", {
-        let config = SpaceyConfig.standard
-        try expect(config.mode(for: "com.superlogical.rex") == nil)
-        try expect(config.mode(for: "app.zen-browser.zen") == nil)
-        try expect(config.mode(for: "com.example.unknown") == nil)
-    }),
-    ("A partial config keeps the rest of the defaults", {
-        let partial = try JSONDecoder().decode(SpaceyConfig.self, from: Data(#"{"gap": 14}"#.utf8))
-        try expect(partial.gap == 14 && partial.modes == SpaceyConfig.standard.modes && partial.dock)
-        let mine = try JSONDecoder().decode(SpaceyConfig.self, from: Data(##"{"modes":[{"name":"Deep","icon":"moon","color":"#000000","apps":[]}]}"##.utf8))
-        try expect(mine.modes.map(\.name) == ["Deep"])
-    }),
-    ("A window shown in every mode shares its screen with each mode", {
-        var (state, live) = deskState()
-        state.assign(window: state.windows[3].id, to: 0)
-        for mode in [1, 3] {
-            state.select(mode, count: 5)
-            let plan = state.plan(displays: desk, live: live)
-            try expect(plan.first { $0.id == state.windows[3].id }?.hidden == false)
-        }
-        state.select(1, count: 5)
-        let onLaptop = state.plan(displays: desk, live: live).filter { p in
-            p.frame.map { laptop.frame.contains(x: $0.midX, y: $0.midY) } == true }
-        try expect(onLaptop.count == 2)
+        var (state, slack, _, _, _) = deskState()
+        try expect(hidden(slack, state.plan(displays: desk, live: live(state, minimized: [slack]))))
+        state.minimizedByManager.insert(slack)
+        try expect(!hidden(slack, state.plan(displays: desk, live: live(state, minimized: [slack]))))
     }),
     ("State survives restart", {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = StateStore(url: folder.appendingPathComponent("desktop.json"))
-        var (state, _) = deskState()
-        state.select(3, count: 5)
+        var (state, _, _, _, _) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
         try store.save(state)
         try expect(try store.load() == state)
+    }),
+    ("An older state file starts fresh instead of failing", {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data(#"{"schemaVersion":2,"windows":[],"mode":3}"#.utf8).write(to: file)
+        try expect(try StateStore(url: file).load() == DesktopState())
     }),
     ("Corrupt state remains untouched", {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -164,6 +170,13 @@ let checks: [(String, () throws -> Void)] = [
         try expect(try String(contentsOf: file, encoding: .utf8) == "broken")
     }),
 ]
+
+extension Optional {
+    func unwrap(_ message: String = #function) throws -> Wrapped {
+        guard let self else { throw CheckFailure(message: "nil: \(message)") }
+        return self
+    }
+}
 
 let all = checks + navigationChecks() + rexChecks() + parkingChecks()
 var failures = 0

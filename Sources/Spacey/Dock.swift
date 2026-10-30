@@ -18,14 +18,14 @@ final class Dock {
 
     @MainActor @Observable
     final class Model {
-        var modes: [SpaceyConfig.Mode] = []
-        var active = 1
+        var categories: [WorkspaceCore.Category] = []
+        var active = ""
         var apps: [App] = []
         var waiting = 0
     }
 
     let model = Model()
-    var onSelect: (Int) -> Void = { _ in }
+    var onSelect: (String) -> Void = { _ in }
     var onApp: (String) -> Void = { _ in }
     var onAttention: () -> Void = {}
     private lazy var panel = makePanel()
@@ -40,9 +40,9 @@ final class Dock {
         return panel
     }
 
-    func update(modes: [SpaceyConfig.Mode], active: Int, apps: [App], waiting: Int, hidden: Bool) {
+    func update(categories: [WorkspaceCore.Category], active: String, apps: [App], waiting: Int, hidden: Bool) {
         withAnimation(.easeOut(duration: 0.2)) {
-            model.modes = modes
+            model.categories = categories
             model.active = active
             model.apps = apps
             model.waiting = waiting
@@ -77,16 +77,14 @@ struct PressStyle: ButtonStyle {
 
 struct DockView: View {
     var model: Dock.Model
-    var select: (Int) -> Void
+    var select: (String) -> Void
     var open: (String) -> Void
     var attention: () -> Void
     @Namespace private var chip
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(Array(model.modes.enumerated()), id: \.offset) { index, mode in
-                modeChip(mode, number: index + 1)
-            }
+            ForEach(model.categories, id: \.id) { category in categoryChip(category) }
             if !model.apps.isEmpty {
                 Rectangle().fill(.white.opacity(0.14)).frame(width: 1, height: 30).padding(.horizontal, 6)
                 ForEach(model.apps) { app in appIcon(app) }
@@ -116,19 +114,19 @@ struct DockView: View {
         .fixedSize()
     }
 
-    func modeChip(_ mode: SpaceyConfig.Mode, number: Int) -> some View {
-        let active = number == model.active
-        return Button { select(number) } label: {
+    func categoryChip(_ category: WorkspaceCore.Category) -> some View {
+        let active = category.id == model.active
+        return Button { select(category.id) } label: {
             HStack(spacing: 6) {
-                Image(systemName: mode.icon).font(.system(size: 13, weight: .semibold))
-                if active { Text(mode.name).font(.system(size: 13, weight: .semibold)).fixedSize() }
+                Image(systemName: category.icon).font(.system(size: 13, weight: .semibold))
+                if active { Text(category.name).font(.system(size: 13, weight: .semibold)).fixedSize() }
             }
             .foregroundStyle(active ? .white : .white.opacity(0.6))
             .padding(.horizontal, active ? 14 : 0)
             .frame(minWidth: 36, minHeight: 36)
             .background {
                 if active {
-                    Capsule().fill(Color(hex: mode.color)).matchedGeometryEffect(id: "active", in: chip)
+                    Capsule().fill(Color(hex: category.color)).matchedGeometryEffect(id: "active", in: chip)
                 } else {
                     Circle().fill(.white.opacity(0.06))
                 }
@@ -136,7 +134,7 @@ struct DockView: View {
             .contentShape(.capsule)
         }
         .buttonStyle(PressStyle())
-        .help("\(mode.name) — Option-\(number)")
+        .help("\(category.name) — Option-\(category.letter.uppercased())")
     }
 
     func appIcon(_ app: Dock.App) -> some View {

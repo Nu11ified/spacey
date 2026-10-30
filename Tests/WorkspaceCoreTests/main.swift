@@ -112,7 +112,7 @@ let checks: [(String, () throws -> Void)] = [
 ]
 
 var failures = 0
-let all = checks + parkingChecks()
+let all = checks + rexChecks() + parkingChecks()
 for (name, run) in all {
     do { try run(); print("PASS \(name)") }
     catch { failures += 1; print("FAIL \(name): \(error)") }

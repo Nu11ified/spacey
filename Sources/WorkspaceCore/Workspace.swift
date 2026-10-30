@@ -442,13 +442,16 @@ public struct DesktopState: Codable, Equatable, Sendable {
         }
     }
 
-    // Puts a category on a screen in the current profile, taking it off any other screen.
-    public mutating func place(_ category: String, on display: Display, displays: [Display]) {
+    // Puts a category on a screen in the current profile, taking it off any other screen. `before`
+    // places it ahead of another category on that screen; otherwise it goes last.
+    public mutating func place(_ category: String, on display: Display, before: String? = nil, displays: [Display]) {
         let key = Self.topologyKey(displays)
         guard var profile = profiles[key], self.category(category) != nil else { return }
         for id in profile.screens.keys { profile.screens[id]?.categories.removeAll { $0 == category } }
         profile.unplaced?.removeAll { $0 == category }
-        profile.screens[display.id, default: ScreenSetup(categories: [], split: true)].categories.append(category)
+        var order = profile.screens[display.id]?.categories ?? []
+        order.insert(category, at: before.flatMap { order.firstIndex(of: $0) } ?? order.endIndex)
+        profile.screens[display.id, default: ScreenSetup(categories: [], split: true)].categories = order
         profile.screens[display.id]?.showing = category
         profiles[key] = profile
     }

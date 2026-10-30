@@ -11,7 +11,14 @@ suite.
 
 ## Categories, workspaces and profiles
 
-Open **Set up Spacey** (Option-Comma, or the grid button in the bar) to see
+Open **Set up Spacey** (Option-Comma, or the grid button in the bar) to map
+everything by dragging. The Screens tab is a board: every window on the left,
+grouped by category, and your monitors on the right with the categories on
+each. Drop a window on a category area to put it there in a workspace of its
+own, or on one of the area's workspace numbers to put it in that workspace.
+Drag a category onto a monitor to move it, hold Option to show it there as
+well, or drop it on another category to put it first. In the Categories tab,
+drag a window onto any workspace of any category. The window also shows
 everything in one place: your monitors drawn to scale with the categories on
 each, every category's nine workspaces and the windows in them, and every
 shortcut. From there you can add a category to a monitor or move it to another

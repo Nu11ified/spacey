@@ -897,6 +897,23 @@ final class Controller: NSObject, NSApplicationDelegate {
             self.applied.removeAll()
             self.reconcile()
         }
+        actions.moveToArea = { [weak self] id, category, displayID, workspace in
+            guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
+            let live = Set(self.bindings.keys)
+            self.state.move(window: id, to: category)
+            let number = workspace ?? self.state.freeWorkspace(in: category, live: live.subtracting([id]))
+            self.state.move(window: id, toWorkspace: number, live: live)
+            self.state.select(workspace: number, in: category, on: display, displays: self.displays())
+            self.state.focusedWindow = id
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.placeBefore = { [weak self] category, displayID, before in
+            guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
+            self.state.place(category, on: display, before: before, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
         actions.add = { [weak self] category, displayID in
             guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
             self.state.add(category, to: display, displays: self.displays())

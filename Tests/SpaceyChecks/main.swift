@@ -179,6 +179,14 @@ let checks: [(String, () throws -> Void)] = [
         try expect(profile.screens["portrait"]?.categories == ["comms", "browser", "notes"])
         try expect(profile.screens["laptop"]?.categories == ["media"])
     }),
+    ("Dropping a category before another reorders a monitor", {
+        var (state, _, _, _, _) = deskState()
+        state.place("browser", on: portrait, before: "comms", displays: desk)
+        try expect(state.profile(for: desk)?.screens["portrait"]?.categories == ["browser", "comms"])
+        state.place("notes", on: portrait, before: "comms", displays: desk)
+        try expect(state.profile(for: desk)?.screens["portrait"]?.categories == ["browser", "notes", "comms"])
+        try expect(state.profile(for: desk)?.screens["laptop"]?.categories == ["media"])
+    }),
     ("Each monitor setup keeps its own profile", {
         var (state, slack, _, _, _) = deskState()
         state.ensureProfile(displays: [laptop])

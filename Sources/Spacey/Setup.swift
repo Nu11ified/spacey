@@ -31,6 +31,8 @@ final class Setup {
         var screens: [Screen] = []
         var categories: [WorkspaceCore.Category] = []
         var workspaces: [String: Int] = [:]
+        // "category|displayID" → the workspace that screen shows.
+        var shown: [String: Int] = [:]
         var windows: [Window] = []
         var intelligence = ""
         var intelligenceAvailable = false
@@ -39,12 +41,14 @@ final class Setup {
 
     struct Actions {
         var place: (String, String) -> Void = { _, _ in }
+        var add: (String, String) -> Void = { _, _ in }
+        var removeFromScreen: (String, String) -> Void = { _, _ in }
         var split: (String, Bool) -> Void = { _, _ in }
         var move: (UUID, String, Int) -> Void = { _, _, _ in }
         var raise: (UUID) -> Void = { _ in }
         var showWorkspace: (String, Int) -> Void = { _, _ in }
         var rename: (String, String) -> Void = { _, _ in }
-        var add: (String) -> Void = { _ in }
+        var addCategory: (String) -> Void = { _ in }
         var remove: (String) -> Void = { _ in }
         var renameProfile: (String) -> Void = { _ in }
         var regroup: () -> Void = {}
@@ -181,6 +185,11 @@ struct ScreensTab: View {
                             .menuIndicator(.hidden)
                             .fixedSize()
                             .help("Move \(category.name) to another monitor")
+                            if model.screens.filter({ $0.categories.contains(id) }).count > 1 {
+                                Button { actions.removeFromScreen(id, screen.id) } label: { Image(systemName: "xmark") }
+                                    .buttonStyle(.borderless)
+                                    .help("Take \(category.name) off this monitor. It stays on the others.")
+                            }
                         }
                     }
                 }
@@ -188,7 +197,10 @@ struct ScreensTab: View {
                 if !missing.isEmpty {
                     Menu {
                         ForEach(missing) { category in
-                            Button("\(category.name)") { actions.place(category.id, screen.id) }
+                            let elsewhere = model.screens.filter { $0.categories.contains(category.id) }.map(\.name)
+                            Button(elsewhere.isEmpty ? category.name : "\(category.name) — also on \(elsewhere.joined(separator: ", "))") {
+                                actions.add(category.id, screen.id)
+                            }
                         }
                     } label: {
                         Label("Add", systemImage: "plus").font(.system(size: 12, weight: .medium))
@@ -260,7 +272,7 @@ struct Arrangement: View {
             layout {
                 ForEach(shown, id: \.self) { id in
                     if let category = model.categories.first(where: { $0.id == id }) {
-                        let workspace = model.workspaces[id] ?? 1
+                        let workspace = model.shown["\(id)|\(screen.id)"] ?? model.workspaces[id] ?? 1
                         let windows = model.windows.filter { $0.category == id && $0.workspace == workspace }
                         VStack(spacing: 3) {
                             Image(systemName: category.icon).font(.system(size: 13, weight: .semibold))
@@ -323,7 +335,7 @@ struct CategoriesTab: View {
     }
 
     func add() {
-        actions.add(newName)
+        actions.addCategory(newName)
         newName = ""
     }
 }

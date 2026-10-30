@@ -196,12 +196,70 @@ public struct DesktopState: Codable, Equatable, Sendable {
         return (1...9).first { !taken.contains($0) } ?? workspace(of: category)
     }
 
-    // Focus following a window: its category comes forward and shows the window's workspace.
-    public mutating func follow(_ window: UUID, displays: [Display]) {
+    // Focus following a window: its category comes forward and shows the window's workspace. If the
+    // category is on several screens and none shows it, it appears on `preferred` (or the first).
+    public mutating func follow(_ window: UUID, displays: [Display], preferred: Display? = nil) {
         guard let record = record(window) else { return }
         focusedWindow = window
-        workspaces[record.category] = record.workspace
-        focus(record.category, displays: displays)
+        if let showing = hosts(of: record.category, displays: displays)
+            .first(where: { workspace(of: record.category, on: $0, displays: displays) == record.workspace }) {
+            focus(record.category, on: showing, displays: displays)
+        } else {
+            select(workspace: record.workspace, in: record.category, on: preferred, displays: displays)
+        }
+    }
+
+    // MARK: Categories on several screens
+
+    // The screens a category is on, left to right.
+    public func hosts(of category: String, displays: [Display]) -> [Display] {
+        guard let profile = profile(for: displays) else { return Array(displays.prefix(1)) }
+        return displays.filter { profile.screens[$0.id]?.categories.contains(category) == true }
+            .sorted { $0.frame.x == $1.frame.x ? $0.frame.y < $1.frame.y : $0.frame.x < $1.frame.x }
+    }
+
+    // A category on several screens shows a different workspace on each. The first screen uses the
+    // category's own workspace; the others remember theirs, defaulting to the next workspace along
+    // that holds a window and isn't showing elsewhere.
+    public func workspace(of category: String, on display: Display, displays: [Display]) -> Int {
+        let hosts = hosts(of: category, displays: displays)
+        guard hosts.count > 1, let index = hosts.firstIndex(where: { $0.id == display.id }), index > 0 else {
+            return workspace(of: category)
+        }
+        if let own = workspaces["\(category)|\(display.id)"] { return own }
+        let earlier = Set(hosts.prefix(index).map { workspace(of: category, on: $0, displays: displays) })
+        let order = (1...9).map { (workspace(of: category) - 1 + $0) % 9 + 1 }.filter { !earlier.contains($0) }
+        let used = Set(windows.filter { $0.category == category }.map(\.workspace))
+        return order.first { used.contains($0) } ?? order.first ?? 1
+    }
+
+    private mutating func show(_ number: Int, of category: String, on display: Display, hosts: [Display]) {
+        if display.id == hosts.first?.id { workspaces[category] = number } else { workspaces["\(category)|\(display.id)"] = number }
+    }
+
+    // Shows a category on another screen too, keeping it where it already is.
+    public mutating func add(_ category: String, to display: Display, displays: [Display]) {
+        let key = Self.topologyKey(displays)
+        guard self.category(category) != nil, profiles[key]?.screens[display.id]?.categories.contains(category) == false else { return }
+        let before = hosts(of: category, displays: displays).map { ($0, workspace(of: category, on: $0, displays: displays)) }
+        profiles[key]?.screens[display.id]?.categories.append(category)
+        profiles[key]?.screens[display.id]?.showing = category
+        // Screens that already showed the category keep showing the same workspace.
+        let hosts = hosts(of: category, displays: displays)
+        for (host, number) in before { show(number, of: category, on: host, hosts: hosts) }
+    }
+
+    // Takes a category off one screen, as long as it stays on another.
+    public mutating func remove(_ category: String, from display: Display, displays: [Display]) {
+        let key = Self.topologyKey(displays)
+        let hosts = hosts(of: category, displays: displays)
+        guard hosts.count > 1 else { return }
+        let kept = hosts.filter { $0.id != display.id }.map { ($0, workspace(of: category, on: $0, displays: displays)) }
+        profiles[key]?.screens[display.id]?.categories.removeAll { $0 == category }
+        if profiles[key]?.screens[display.id]?.showing == category { profiles[key]?.screens[display.id]?.showing = nil }
+        workspaces["\(category)|\(display.id)"] = nil
+        let remaining = self.hosts(of: category, displays: displays)
+        for (host, number) in kept { show(number, of: category, on: host, hosts: remaining) }
     }
 
     // MARK: Profiles
@@ -236,8 +294,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     }
 
     public func screen(of category: String, displays: [Display]) -> Display? {
-        guard let profile = profile(for: displays) else { return displays.first }
-        return displays.first { profile.screens[$0.id]?.categories.contains(category) == true } ?? displays.first
+        hosts(of: category, displays: displays).first ?? displays.first
     }
 
     // The categories a screen is showing right now.
@@ -250,17 +307,29 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // MARK: Focus and moves
 
     // Focusing a category brings it forward on its screen if that screen takes turns.
-    public mutating func focus(_ category: String, displays: [Display]) {
+    public mutating func focus(_ category: String, on display: Display? = nil, displays: [Display]) {
         guard self.category(category) != nil else { return }
         focusedCategory = category
-        guard let display = screen(of: category, displays: displays) else { return }
-        profiles[Self.topologyKey(displays)]?.screens[display.id]?.showing = category
+        let hosts = hosts(of: category, displays: displays)
+        guard let target = display.flatMap({ d in hosts.first { $0.id == d.id } }) ?? hosts.first else { return }
+        profiles[Self.topologyKey(displays)]?.screens[target.id]?.showing = category
     }
 
-    public mutating func select(workspace: Int, in category: String, displays: [Display]) {
-        guard (1...9).contains(workspace) else { return }
-        workspaces[category] = workspace
-        focus(category, displays: displays)
+    // Shows a workspace on `display` (when the category is there) or the category's first screen.
+    // On a category spread over several screens, a workspace already showing elsewhere swaps places.
+    public mutating func select(workspace number: Int, in category: String, on display: Display? = nil, displays: [Display]) {
+        guard (1...9).contains(number) else { return }
+        let hosts = hosts(of: category, displays: displays)
+        guard hosts.count > 1, let target = display.flatMap({ d in hosts.first { $0.id == d.id } }) ?? hosts.first else {
+            workspaces[category] = number
+            focus(category, displays: displays)
+            return
+        }
+        var current = Dictionary(uniqueKeysWithValues: hosts.map { ($0.id, workspace(of: category, on: $0, displays: displays)) })
+        if let other = hosts.first(where: { $0.id != target.id && current[$0.id] == number }) { current[other.id] = current[target.id] }
+        current[target.id] = number
+        for host in hosts { show(current[host.id]!, of: category, on: host, hosts: hosts) }
+        focus(category, on: target, displays: displays)
     }
 
     // Moving a window to a category also teaches Spacey where that app belongs.
@@ -367,7 +436,8 @@ public struct DesktopState: Codable, Equatable, Sendable {
             for display in displays {
                 // A category with nothing in its current workspace gives its share of the screen away.
                 let groups = visible(on: display, displays: displays).map { category in
-                    (category, windows.filter { $0.category == category && $0.workspace == workspace(of: category) && showable($0) })
+                    let number = workspace(of: category, on: display, displays: displays)
+                    return (category, windows.filter { $0.category == category && $0.workspace == number && showable($0) && !shown.contains($0.id) })
                 }.filter { !$0.1.isEmpty }
                 guard !groups.isEmpty else { continue }
                 let setup = profile(for: displays)?.screens[display.id]

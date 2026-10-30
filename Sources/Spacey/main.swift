@@ -58,7 +58,10 @@ final class Controller: NSObject, NSApplicationDelegate {
         dock.onApp = { [weak self] in self?.open(app: $0) }
         dock.onAttention = { [weak self] in self?.jumpToMostUrgent() }
         bar.onCategory = { [weak self] in self?.focusCategory($0) }
-        bar.onWorkspace = { [weak self] category, number in self?.selectWorkspace(number, in: category) }
+        bar.onWorkspace = { [weak self] category, number, displayID in
+            guard let self else { return }
+            self.selectWorkspace(number, in: category, on: self.displays().first { $0.id == displayID })
+        }
         bar.onMenu = { [weak self] view in
             guard let self else { return }
             self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 6), in: view)
@@ -204,7 +207,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     // spacey://focus/browser, spacey://workspace/browser/2, spacey://move/comms, spacey://solo,
     // spacey://pause, spacey://resume, spacey://reload, spacey://inbox, spacey://jump, spacey://awake,
-    // spacey://setup/1 (0 screens, 1 categories, 2 shortcuts)
+    // spacey://setup/1 (0 screens, 1 categories, 2 shortcuts), spacey://add/browser/2, spacey://remove/browser/2
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: text), url.scheme == "spacey" else { return }
@@ -215,6 +218,14 @@ final class Controller: NSObject, NSApplicationDelegate {
             if parts.count == 2, let number = Int(parts[1]) { selectWorkspace(number, in: parts[0]) }
             else if let number = parts.first.flatMap(Int.init), let category = state.focusedCategory { selectWorkspace(number, in: category) }
         case "move": if let category = parts.first { moveFocused(toCategory: category) }
+        case "add", "remove":
+            // spacey://add/browser/2 puts Browser on screen 2 (counting left to right) as well.
+            let displays = displays().sorted { $0.frame.x == $1.frame.x ? $0.frame.y < $1.frame.y : $0.frame.x < $1.frame.x }
+            guard parts.count == 2, let index = Int(parts[1]), displays.indices.contains(index - 1) else { break }
+            if url.host == "add" { state.add(parts[0], to: displays[index - 1], displays: self.displays()) }
+            else { state.remove(parts[0], from: displays[index - 1], displays: self.displays()) }
+            applied.removeAll()
+            reconcile()
         case "solo": toggleSolo()
         case "pause": if enabled { pause() }
         case "resume": if !enabled { start() }
@@ -428,9 +439,18 @@ final class Controller: NSObject, NSApplicationDelegate {
         if let category = state.focusedCategory { previous = (category, state.workspace(of: category)) }
     }
 
+    // The screen a category key acts on: the one you're on if the category is there, else its first.
+    func target(for category: String) -> Display? {
+        let displays = displays()
+        let hosts = state.hosts(of: category, displays: displays)
+        return focusedDisplay.flatMap { here in hosts.first { $0.id == here.id } } ?? hosts.first
+    }
+
     // Raises the window in the category's current workspace; an empty category opens its first app.
-    func raiseCurrent(in category: String) {
-        let workspace = state.workspace(of: category)
+    func raiseCurrent(in category: String, on display: Display? = nil) {
+        let displays = displays()
+        let workspace = (display ?? target(for: category)).map { state.workspace(of: category, on: $0, displays: displays) }
+            ?? state.workspace(of: category)
         if let record = state.windows.first(where: { $0.category == category && $0.workspace == workspace && bindings[$0.id] != nil }),
            let window = bindings[record.id] {
             state.focusedWindow = record.id
@@ -444,17 +464,20 @@ final class Controller: NSObject, NSApplicationDelegate {
     func focusCategory(_ category: String) {
         guard enabled, state.category(category) != nil else { return }
         remember()
-        state.focus(category, displays: displays())
+        let display = target(for: category)
+        state.focus(category, on: display, displays: displays())
         reconcile()
-        raiseCurrent(in: category)
+        raiseCurrent(in: category, on: display)
     }
 
-    func selectWorkspace(_ number: Int, in category: String) {
+    // `display` picks which screen's copy of the category changes; by default the one you're on.
+    func selectWorkspace(_ number: Int, in category: String, on display: Display? = nil) {
         guard enabled, state.category(category) != nil, (1...9).contains(number) else { return }
         remember()
-        state.select(workspace: number, in: category, displays: displays())
+        let screen = display ?? target(for: category)
+        state.select(workspace: number, in: category, on: screen, displays: displays())
         reconcile()
-        raiseCurrent(in: category)
+        raiseCurrent(in: category, on: screen)
     }
 
     func moveFocused(toCategory category: String) {
@@ -511,7 +534,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         guard let category = state.focusedCategory else { return }
         let used = Set(state.windows.filter { $0.category == category && bindings[$0.id] != nil }.map(\.workspace)).sorted()
         guard !used.isEmpty else { return }
-        let next = used.first { $0 > state.workspace(of: category) } ?? used[0]
+        let here = target(for: category).map { state.workspace(of: category, on: $0, displays: displays()) } ?? state.workspace(of: category)
+        let next = used.first { $0 > here } ?? used[0]
         selectWorkspace(next, in: category)
     }
 
@@ -679,7 +703,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             screens[display.id] = setup.categories.compactMap { id in
                 guard let category = state.category(id) else { return nil }
                 let used = Set(state.windows.filter { $0.category == id && live.contains($0.id) }.map(\.workspace))
-                return Bar.Item(category: category, workspace: state.workspace(of: id), used: used,
+                return Bar.Item(category: category, workspace: state.workspace(of: id, on: display, displays: displays), used: used,
                                 focused: state.focusedCategory == id && enabled, showing: showing.contains(id))
             }
         }
@@ -731,6 +755,12 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         model.categories = state.categories
         model.workspaces = Dictionary(uniqueKeysWithValues: state.categories.map { ($0.id, state.workspace(of: $0.id)) })
+        model.shown = [:]
+        for display in displays {
+            for id in profile?.screens[display.id]?.categories ?? [] {
+                model.shown["\(id)|\(display.id)"] = state.workspace(of: id, on: display, displays: displays)
+            }
+        }
         model.windows = state.windows.filter { bindings[$0.id] != nil }.map { record in
             let app = NSRunningApplication.runningApplications(withBundleIdentifier: record.appID).first
             return Setup.Window(id: record.id, app: app?.localizedName ?? record.appID, title: record.title, icon: app?.icon,
@@ -746,6 +776,18 @@ final class Controller: NSObject, NSApplicationDelegate {
         actions.place = { [weak self] category, displayID in
             guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
             self.state.place(category, on: display, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.add = { [weak self] category, displayID in
+            guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
+            self.state.add(category, to: display, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.removeFromScreen = { [weak self] category, displayID in
+            guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
+            self.state.remove(category, from: display, displays: self.displays())
             self.applied.removeAll()
             self.reconcile()
         }
@@ -778,7 +820,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             try? self.store.save(self.state)
             self.refresh()
         }
-        actions.add = { [weak self] name in
+        actions.addCategory = { [weak self] name in
             guard let self else { return }
             guard self.state.addCategory(named: name, color: Advisor.colors[self.state.categories.count % Advisor.colors.count]) != nil else {
                 self.lastError = "Couldn't add \(name): the name is taken or no letter is free."

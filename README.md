@@ -29,6 +29,13 @@ shows its categories either side by side or one at a time; Option-Control-S
 switches between the two. A category with nothing in its current workspace
 gives its space to the others.
 
+A category can also live on **several monitors**, with Browser on two screens
+for example. Each monitor then shows its own workspace of that category, and
+Option-letter followed by a number changes the copy on the monitor you're on. Picking
+a workspace that's already showing on another monitor swaps the two. In setup,
+**+ Add** puts a category on a monitor without taking it off the others, and ×
+takes it off one monitor.
+
 A **profile** is one monitor arrangement, such as the desk or the laptop alone.
 Spacey keeps one for each set of connected displays and switches as monitors
 come and go. Unplug and the laptop profile takes over; plug back in and every
@@ -116,7 +123,8 @@ S and Q are taken by other keys.
 
 Scripts can drive Spacey with URLs: `spacey://focus/browser`,
 `spacey://workspace/browser/2`, `spacey://move/comms`, `spacey://solo`,
-`spacey://pause`, `spacey://resume`, `spacey://reload`, `spacey://inbox`,
+`spacey://pause`, `spacey://resume`, `spacey://reload`, `spacey://inbox`, `spacey://add/browser/2` and
+`spacey://remove/browser/2` (screens counted left to right),
 `spacey://jump`, `spacey://awake`. `~/Library/Application
 Support/Spacey/status.json` reports the current state.
 

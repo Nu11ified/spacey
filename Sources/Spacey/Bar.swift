@@ -43,7 +43,7 @@ final class Bar {
 
     let model = Model()
     var onCategory: (String) -> Void = { _ in }
-    var onWorkspace: (String, Int) -> Void = { _, _ in }
+    var onWorkspace: (String, Int, String) -> Void = { _, _, _ in }
     var onMenu: (NSView) -> Void = { _ in }
     var onRex: () -> Void = {}
     var onAwake: () -> Void = {}
@@ -68,7 +68,7 @@ final class Bar {
                 let view = BarView(model: model, display: display.id, main: screen == NSScreen.screens.first,
                                    notch: screen.safeAreaInsets.top > 0,
                                    category: { [weak self] in self?.onCategory($0) },
-                                   workspace: { [weak self] in self?.onWorkspace($0, $1) },
+                                   workspace: { [weak self] in self?.onWorkspace($0, $1, display.id) },
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
                                    awake: { [weak self] in self?.onAwake() }, setup: { [weak self] in self?.onSetup() })
                 let panel = GlassPanel(view, fitsContent: false, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])

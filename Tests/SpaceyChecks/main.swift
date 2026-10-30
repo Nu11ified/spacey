@@ -53,6 +53,47 @@ let checks: [(String, () throws -> Void)] = [
         let plan = state.plan(displays: desk, live: live(state))
         try expect(try frame(slack, plan).unwrap().height > portrait.frame.height * 0.9)
     }),
+    ("Browser on two monitors shows a different workspace on each", {
+        var (state, _, zen1, zen2, _) = deskState()
+        state.add("browser", to: landscape, displays: desk)
+        var plan = state.plan(displays: desk, live: live(state))
+        let left = try frame(zen1, plan).unwrap(), right = try frame(zen2, plan).unwrap()
+        try expect(portrait.frame.contains(x: left.midX, y: left.midY))
+        try expect(landscape.frame.contains(x: right.midX, y: right.midY))
+        // Asking the wide monitor for workspace 1, which the vertical one shows, swaps them.
+        state.select(workspace: 1, in: "browser", on: landscape, displays: desk)
+        plan = state.plan(displays: desk, live: live(state))
+        let swappedLeft = try frame(zen2, plan).unwrap(), swappedRight = try frame(zen1, plan).unwrap()
+        try expect(portrait.frame.contains(x: swappedLeft.midX, y: swappedLeft.midY))
+        try expect(landscape.frame.contains(x: swappedRight.midX, y: swappedRight.midY))
+    }),
+    ("A second copy of a category starts on a workspace that has a window", {
+        var (state, _, _, _, _) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
+        state.add("browser", to: landscape, displays: desk)
+        try expect(state.workspace(of: "browser", on: landscape, displays: desk) == 1)
+    }),
+    ("Taking a category off one monitor leaves the other as it was", {
+        var (state, _, zen1, zen2, _) = deskState()
+        state.add("browser", to: landscape, displays: desk)
+        state.remove("browser", from: portrait, displays: desk)
+        let plan = state.plan(displays: desk, live: live(state))
+        let wide = try frame(zen2, plan).unwrap()
+        try expect(landscape.frame.contains(x: wide.midX, y: wide.midY) && hidden(zen1, plan))
+        state.remove("browser", from: landscape, displays: desk)
+        try expect(state.hosts(of: "browser", displays: desk).map(\.id) == ["landscape"])
+    }),
+    ("Focusing a hidden window on a shared category shows it where you are", {
+        var (state, _, zen1, zen2, _) = deskState()
+        state.add("browser", to: landscape, displays: desk)
+        let zen3 = WindowRecord(appID: "app.zen-browser.zen", title: "Three", category: "browser", workspace: 3)
+        state.windows.append(zen3)
+        state.follow(zen3.id, displays: desk, preferred: landscape)
+        let plan = state.plan(displays: desk, live: live(state))
+        let shown = try frame(zen3.id, plan).unwrap()
+        try expect(landscape.frame.contains(x: shown.midX, y: shown.midY))
+        try expect(!hidden(zen1, plan) && hidden(zen2, plan))
+    }),
     ("Picking a workspace changes only that category", {
         var (state, slack, zen1, zen2, _) = deskState()
         state.select(workspace: 2, in: "browser", displays: desk)

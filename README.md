@@ -15,7 +15,9 @@ Open **Set up Spacey** (Option-Comma, or the grid button in the bar) to map
 everything by dragging. The Screens tab is a board: every window on the left,
 grouped by category, and your monitors on the right with the categories on
 each. Drop a window on a category area to put it there in a workspace of its
-own, or on one of the area's workspace numbers to put it in that workspace.
+own, or on one of the area's workspace numbers to put it in that workspace. If
+that workspace already has a window, the two swap; hold Option to share it
+instead.
 Drag a category onto a monitor to move it, hold Option to show it there as
 well, or drop it on another category to put it first. In the Categories tab,
 drag a window onto any workspace of any category. The window also shows
@@ -112,7 +114,7 @@ follows Rex's event stream.
 | Option-letter, then 1–9 | That category's workspace, within about a second |
 | Option-1 … 9 | Workspace of the focused category |
 | Option-Shift-letter | Move the focused window to a category |
-| Option-Shift-1 … 9 | Move the focused window to a workspace |
+| Option-Shift-1 … 9 | Move the focused window to a workspace (swapping with what's there) |
 | Option-Control-letter | Put a category on the monitor you're on |
 | Option-Control-S | This monitor: side by side, or one category at a time |
 | Option-Tab | Next workspace with a window, in the focused category |

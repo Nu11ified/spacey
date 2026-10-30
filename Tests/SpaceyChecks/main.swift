@@ -142,6 +142,16 @@ let checks: [(String, () throws -> Void)] = [
         let plan = shown.plan(displays: desk, live: live(shown))
         try expect(try frame(zen1, plan).unwrap().height > portrait.frame.height * 0.9)
     }),
+    ("Dropping a window on an occupied workspace swaps the two", {
+        var (state, slack, zen1, zen2, _) = deskState()
+        let all = Set(state.windows.map(\.id))
+        state.exchange(zen1, category: "browser", workspace: 2, live: all)
+        try expect(state.record(zen1)?.workspace == 2 && state.record(zen2)?.workspace == 1)
+        // Across categories, the other window takes the old category and workspace.
+        state.exchange(slack, category: "browser", workspace: 2, live: all)
+        try expect(state.record(slack)?.category == "browser" && state.record(slack)?.workspace == 2)
+        try expect(state.record(zen1)?.category == "comms" && state.record(zen1)?.workspace == 1)
+    }),
     ("Windows that land in the same workspace by accident get their own", {
         var (state, _, zen1, zen2, _) = deskState()
         let all = Set(state.windows.map(\.id))

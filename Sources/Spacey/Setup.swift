@@ -515,7 +515,7 @@ struct CategoriesTab: View {
                     .disabled(!model.intelligenceAvailable)
                     .help(model.intelligence)
                 }
-                Text("Drag a window onto any workspace, in any category. Drop it on a workspace that has a window and they share it.")
+                Text("Drag a window onto any workspace, in any category. Onto a workspace that has a window, the two swap; hold Option to share it instead.")
                     .font(.system(size: 11.5)).foregroundStyle(.tertiary)
                 if !model.intelligenceAvailable {
                     Text("Apple Intelligence: \(model.intelligence). Built-in app knowledge sorts new windows until then.")
@@ -595,7 +595,7 @@ struct CategoryCard: View {
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .topLeading)
         .background(.white.opacity(current ? 0.06 : 0.025), in: .rect(cornerRadius: 8))
         .modifier(DropHighlight(active: targeted == number, color: Color(hex: category.color), radius: 8))
-        // Drop a window here to move it to this workspace; onto a window, they share it.
+        // Drop a window here to move it to this workspace; onto a window, they swap (Option shares).
         .dropDestination(for: String.self) { items, _ in
             guard let item = items.first, case .window(let id)? = Payload(item) else { return false }
             actions.move(id, category.id, number)
@@ -621,7 +621,7 @@ struct CategoryCard: View {
                     Menu(target.name) {
                         ForEach(1...9, id: \.self) { number in
                             let taken = model.windows.filter { $0.category == target.id && $0.workspace == number && $0.id != window.id }
-                            Button("Workspace \(number)" + (taken.isEmpty ? "" : " — with \(taken[0].app)")) {
+                            Button("Workspace \(number)" + (taken.isEmpty ? "" : " — swap with \(taken[0].app)")) {
                                 actions.move(window.id, target.id, number)
                             }
                         }

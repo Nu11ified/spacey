@@ -430,6 +430,24 @@ public struct DesktopState: Codable, Equatable, Sendable {
         windows[index].together = windows.contains { $0.id != window && $0.category == category && $0.workspace == number && live.contains($0.id) } ? true : nil
     }
 
+    // Puts a window in a category's workspace. Whatever was there takes the window's old place, in
+    // its old category if that was different.
+    public mutating func exchange(_ window: UUID, category: String, workspace number: Int, live: Set<UUID>) {
+        guard (1...9).contains(number), self.category(category) != nil, let record = record(window) else { return }
+        let (fromCategory, fromWorkspace) = (record.category, record.workspace)
+        for index in windows.indices where windows[index].id != window && live.contains(windows[index].id)
+            && windows[index].category == category && windows[index].workspace == number {
+            windows[index].category = fromCategory
+            windows[index].workspace = fromWorkspace
+            windows[index].together = nil
+        }
+        if category != fromCategory { move(window: window, to: category) }
+        if let index = windows.firstIndex(where: { $0.id == window }) {
+            windows[index].workspace = number
+            windows[index].together = nil
+        }
+    }
+
     // One window per workspace: when windows share one without that being chosen, every window after
     // the first moves to the next empty workspace of its category.
     public mutating func separate(live: Set<UUID>) {

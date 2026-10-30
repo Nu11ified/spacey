@@ -608,7 +608,8 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func moveFocused(toWorkspace number: Int) {
         guard enabled, let id = focusedID else { return }
-        state.move(window: id, toWorkspace: number, live: Set(bindings.keys))
+        guard let category = state.record(id)?.category else { return }
+        state.exchange(id, category: category, workspace: number, live: Set(bindings.keys))
         state.follow(id, displays: displays())
         reconcile()
         if let window = bindings[id] { MacDesktop.raise(window) }
@@ -899,10 +900,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         actions.moveToArea = { [weak self] id, category, displayID, workspace in
             guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
-            let live = Set(self.bindings.keys)
-            self.state.move(window: id, to: category)
-            let number = workspace ?? self.state.freeWorkspace(in: category, live: live.subtracting([id]))
-            self.state.move(window: id, toWorkspace: number, live: live)
+            let number = workspace ?? self.state.freeWorkspace(in: category, live: Set(self.bindings.keys).subtracting([id]))
+            self.place(id, category: category, workspace: number)
             self.state.select(workspace: number, in: category, on: display, displays: self.displays())
             self.state.focusedWindow = id
             self.applied.removeAll()
@@ -935,8 +934,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         actions.move = { [weak self] id, category, workspace in
             guard let self else { return }
-            self.state.move(window: id, to: category)
-            self.state.move(window: id, toWorkspace: workspace, live: Set(self.bindings.keys))
+            self.place(id, category: category, workspace: workspace)
             self.state.follow(id, displays: self.displays())
             self.applied.removeAll()
             self.reconcile()
@@ -982,6 +980,17 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         actions.regroup = { [weak self] in self?.regroup() }
         return actions
+    }
+
+    // Into an occupied workspace, windows swap; holding Option while dropping makes them share instead.
+    func place(_ id: UUID, category: String, workspace: Int) {
+        let live = Set(bindings.keys)
+        if NSEvent.modifierFlags.contains(.option) {
+            state.move(window: id, to: category)
+            state.move(window: id, toWorkspace: workspace, live: live)
+        } else {
+            state.exchange(id, category: category, workspace: workspace, live: live)
+        }
     }
 
     func ask(_ title: String, value: String) -> String? {

@@ -10,6 +10,7 @@ mkdir -p "$bundle/Contents/MacOS"
 cp "$binary_dir/Spacey" "$bundle/Contents/MacOS/Spacey"
 cp packaging/Info.plist "$bundle/Contents/Info.plist"
 mkdir -p "$bundle/Contents/Resources"
+cp packaging/Spacey.icns "$bundle/Contents/Resources/Spacey.icns"
 
 # A stable signing identity keeps the Accessibility grant across rebuilds. Ad-hoc signatures change
 # with every build, and macOS then silently drops the permission.

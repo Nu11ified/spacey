@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#241A5C"/>
+      <stop offset="0.55" stop-color="#3E2385"/>
+      <stop offset="1" stop-color="#7A2E8E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.45">
+      <stop offset="0" stop-color="#FFB547" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FFB547" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0.3" y1="0.1" x2="0.7" y2="0.95">
+      <stop offset="0" stop-color="#FFF07A"/>
+      <stop offset="0.55" stop-color="#FFC93C"/>
+      <stop offset="1" stop-color="#FF9A1F"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#sky)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+    <path transform="translate(230 250) scale(1.3)" d="M0 -20 C2 -6 6 -2 20 0 C6 2 2 6 0 20 C-2 6 -6 2 -20 0 C-6 -2 -2 -6 0 -20 Z" fill="#FFFFFF" opacity="0.9"/><path transform="translate(800 230) scale(0.9)" d="M0 -20 C2 -6 6 -2 20 0 C6 2 2 6 0 20 C-2 6 -6 2 -20 0 C-6 -2 -2 -6 0 -20 Z" fill="#FFFFFF" opacity="0.75"/><path transform="translate(820 760) scale(1.1)" d="M0 -20 C2 -6 6 -2 20 0 C6 2 2 6 0 20 C-2 6 -6 2 -20 0 C-6 -2 -2 -6 0 -20 Z" fill="#FFFFFF" opacity="0.8"/><path transform="translate(210 780) scale(0.7)" d="M0 -20 C2 -6 6 -2 20 0 C6 2 2 6 0 20 C-2 6 -6 2 -20 0 C-6 -2 -2 -6 0 -20 Z" fill="#FFFFFF" opacity="0.6"/>
+    <circle cx="300" cy="180" r="5" fill="#fff" opacity="0.6"/><circle cx="700" cy="160" r="4" fill="#fff" opacity="0.5"/>
+    <circle cx="880" cy="480" r="5" fill="#fff" opacity="0.55"/><circle cx="150" cy="520" r="4" fill="#fff" opacity="0.5"/>
+    <circle cx="640" cy="880" r="5" fill="#fff" opacity="0.5"/>
+    <g transform="translate(512 600) rotate(-16)">
+      <ellipse rx="390" ry="104" fill="none" stroke="#7FE0FF" stroke-width="20" opacity="0.9"/>
+    </g>
+    <path d="M512.0 256.0 L600.2 426.6 L789.7 457.8 L654.7 594.4 L683.6 784.2 L512.0 698.0 L340.4 784.2 L369.3 594.4 L234.3 457.8 L423.8 426.6 Z" fill="none" stroke="#1E1045" stroke-width="88" stroke-linejoin="round"/>
+    <path d="M512.0 256.0 L600.2 426.6 L789.7 457.8 L654.7 594.4 L683.6 784.2 L512.0 698.0 L340.4 784.2 L369.3 594.4 L234.3 457.8 L423.8 426.6 Z" fill="url(#body)" stroke="url(#body)" stroke-width="44" stroke-linejoin="round"/>
+    <path d="M418 418 C442 390 470 380 494 381" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" opacity="0.7"/>
+    <ellipse cx="452" cy="530" rx="27" ry="38" fill="#1E1045"/>
+    <ellipse cx="572" cy="530" rx="27" ry="38" fill="#1E1045"/>
+    <circle cx="444" cy="516" r="10" fill="#fff"/><circle cx="564" cy="516" r="10" fill="#fff"/>
+    <ellipse cx="404" cy="592" rx="30" ry="16" fill="#FF6F91" opacity="0.6"/>
+    <ellipse cx="620" cy="592" rx="30" ry="16" fill="#FF6F91" opacity="0.6"/>
+    <path d="M474 592 Q512 632 550 592" fill="none" stroke="#1E1045" stroke-width="15" stroke-linecap="round"/>
+    <g transform="translate(512 600) rotate(-16)">
+      <path d="M-330 55 A390 104 0 0 0 330 55" fill="none" stroke="#7FE0FF" stroke-width="20" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>

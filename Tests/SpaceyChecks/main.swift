@@ -87,6 +87,14 @@ let checks: [(String, () throws -> Void)] = [
         try expect(!state.isUnplaced("notes", displays: desk))
         try expect(!hidden(notes.id, state.plan(displays: desk, live: live(state))))
     }),
+    ("Each monitor's copy of a category gets its own key", {
+        var (state, _, _, _, _) = deskState()
+        state.add("browser", to: landscape, displays: desk)
+        let keys = Dictionary(uniqueKeysWithValues: state.areas(displays: desk).map { ("\($0.display)|\($0.category)", $0.letter) })
+        try expect(keys["portrait|browser"] == "b" && keys["landscape|browser"] == "r")
+        try expect(keys["portrait|comms"] == "c" && keys["landscape|agents"] == "a" && keys["laptop|notes"] == "n")
+        try expect(Set(keys.values).count == keys.count)
+    }),
     ("Taking a category off one monitor leaves the other as it was", {
         var (state, _, zen1, zen2, _) = deskState()
         state.add("browser", to: landscape, displays: desk)

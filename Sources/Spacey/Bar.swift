@@ -21,8 +21,12 @@ final class Bar {
 
     struct Item: Equatable {
         var category: WorkspaceCore.Category
+        // This area's key; a category on two monitors has a different letter on each.
+        var letter: String
         var workspace: Int
         var used: Set<Int>
+        // Workspaces whose only windows are minimized; shown dimmer.
+        var minimized: Set<Int>
         var focused: Bool
         var showing: Bool
     }
@@ -150,13 +154,13 @@ struct BarView: View {
     // workspace is filled. While Option-B waits for a digit, all nine are offered.
     func categoryChip(_ item: Bar.Item) -> some View {
         let color = Color(hex: item.category.color)
-        let armed = model.chord == item.category.id
-        // Only workspaces with a window; an emptied one disappears as soon as its window goes.
+        let armed = model.chord == "\(display)|\(item.category.id)"
+        // Only workspaces with a window (minimized ones dimmer); an emptied one disappears.
         let numbers = armed ? Array(1...9) : item.used.sorted()
         return HStack(spacing: 2) {
             Button { category(item.category.id) } label: {
                 HStack(spacing: 5) {
-                    Text(item.category.letter.uppercased())
+                    Text(item.letter.uppercased())
                         .font(.system(size: 10, weight: .heavy).monospaced())
                         .frame(width: 15, height: 15)
                         .background(item.focused ? AnyShapeStyle(color) : AnyShapeStyle(.white.opacity(0.12)), in: .rect(cornerRadius: 4))
@@ -165,7 +169,7 @@ struct BarView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(PressStyle())
-            .help("\(item.category.name) — Option-\(item.category.letter.uppercased()), then a number")
+            .help("\(item.category.name) — Option-\(item.letter.uppercased()), then a number")
             ForEach(numbers, id: \.self) { number in
                 let current = number == item.workspace
                 Button { workspace(item.category.id, number) } label: {
@@ -173,7 +177,7 @@ struct BarView: View {
                         .font(.system(size: 11, weight: current ? .bold : .medium).monospacedDigit())
                         .frame(width: 17, height: 17)
                         .background(current ? AnyShapeStyle(color.opacity(item.focused ? 1 : 0.45)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 4))
-                        .opacity(item.used.contains(number) || current ? 1 : 0.4)
+                        .opacity(item.minimized.contains(number) ? 0.45 : item.used.contains(number) || current ? 1 : 0.4)
                         .contentShape(.rect)
                 }
                 .buttonStyle(PressStyle())

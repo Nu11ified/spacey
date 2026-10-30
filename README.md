@@ -38,6 +38,12 @@ shows its categories either side by side or one at a time; Option-Control-S
 switches between the two. A category with nothing in its current workspace
 gives its space to the others.
 
+Every **area** (one category on one monitor) has its own Option-letter. A
+category's first monitor, counting left to right, uses the category's letter;
+another monitor showing the same category gets the next free letter of its
+name. Browser on two monitors is Option-B on one and Option-R on the other. The
+bar and the setup board show each area's letter.
+
 A category can also live on **several monitors**, with Browser on two screens
 for example. Each monitor then shows its own workspace of that category, and
 Option-letter followed by a number changes the copy on the monitor you're on. Picking
@@ -85,7 +91,8 @@ dock stay out of their Space.
 ## Bar and dock
 
 Each monitor's bar lists the categories on that monitor: the letter, the name,
-and the workspaces that hold windows, with the current workspace filled. Click a
+and the workspaces that hold windows (minimized ones dimmer), with the current
+workspace filled. Click a
 category or a number to switch. The main screen also shows Rex status,
 keep-awake, battery and the clock. Click the clock for Spacey's
 menu. The macOS menu bar slides in when the pointer reaches the top edge.
@@ -110,10 +117,10 @@ follows Rex's event stream.
 
 | Keys | Action |
 | --- | --- |
-| Option-letter | Focus a category (A Agents, B Browser, C Comms, N Notes, M Media) |
-| Option-letter, then 1–9 | That category's workspace, within about a second |
+| Option-letter | Bring that area forward: one category on one monitor. On a monitor showing one category at a time, this switches it |
+| Option-letter, then 1–9 | That area's workspace, within about a second (a minimized window comes back) |
 | Option-1 … 9 | Workspace of the focused category |
-| Option-Shift-letter | Move the focused window to a category |
+| Option-Shift-letter | Move the focused window into that area |
 | Option-Shift-1 … 9 | Move the focused window to a workspace (swapping with what's there) |
 | Option-Control-letter | Put a category on the monitor you're on |
 | Option-Control-S | This monitor: side by side, or one category at a time |

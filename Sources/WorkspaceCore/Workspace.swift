@@ -270,6 +270,37 @@ public struct DesktopState: Codable, Equatable, Sendable {
         }
     }
 
+    // MARK: Areas and their keys
+
+    // One category on one screen. Each area has its own Option-letter: a category's first screen
+    // (left to right) uses the category's letter, and any further screen gets the next free letter
+    // of the category's name, so Browser on two monitors is Option-B and Option-R.
+    public struct Area: Equatable, Sendable {
+        public var display: String
+        public var category: String
+        public var letter: String
+    }
+
+    public func areas(displays: [Display]) -> [Area] {
+        guard let profile = profile(for: displays) else { return [] }
+        let ordered = displays.sorted { $0.frame.x == $1.frame.x ? $0.frame.y < $1.frame.y : $0.frame.x < $1.frame.x }
+        var taken = Set(categories.compactMap(\.letter.first)).union(Self.reservedLetters)
+        var seen: Set<String> = []
+        var result: [Area] = []
+        for display in ordered {
+            for id in profile.screens[display.id]?.categories ?? [] {
+                guard let category = category(id) else { continue }
+                if seen.insert(id).inserted {
+                    result.append(Area(display: display.id, category: id, letter: category.letter))
+                } else if let letter = (category.name.lowercased().filter(\.isLetter) + "abcdeginmoprtuvwxyz").first(where: { !taken.contains($0) }) {
+                    taken.insert(letter)
+                    result.append(Area(display: display.id, category: id, letter: String(letter)))
+                }
+            }
+        }
+        return result
+    }
+
     // MARK: Categories on several screens
 
     // The screens a category is on, left to right.

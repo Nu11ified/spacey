@@ -20,6 +20,10 @@ final class Controller: NSObject, NSApplicationDelegate {
     var alwaysHotKeys: [EventHotKeyRef] = []
     var chordKeys: [EventHotKeyRef] = []
     var chordCategory: String?
+    var chordDisplay: String?
+    // The areas whose keys are registered, in key-id order, and the categories on no monitor.
+    var areaKeys: [DesktopState.Area] = []
+    var spareKeys: [String] = []
     var chordTimer: DispatchWorkItem?
     var hotKeyHandler: EventHandlerRef?
     // Windows that refused their tile size four times in a row: they sit centred in their spot.
@@ -566,6 +570,11 @@ final class Controller: NSObject, NSApplicationDelegate {
         if let record = state.windows.first(where: { $0.category == category && $0.workspace == workspace && bindings[$0.id] != nil }),
            let window = bindings[record.id] {
             state.focusedWindow = record.id
+            // Picking a workspace whose window is minimized brings the window back.
+            if window.minimized {
+                try? MacDesktop.setMinimized(window, false)
+                schedule(delay: 0.3)
+            }
             MacDesktop.raise(window)
         } else if !state.windows.contains(where: { $0.category == category && bindings[$0.id] != nil }),
                   let app = state.category(category)?.apps.first(where: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil }) {
@@ -703,6 +712,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     }
 
     func refresh() {
+        refreshKeys()
         refreshSetup()
         rebuildMenu()
         refreshBar()
@@ -807,14 +817,20 @@ final class Controller: NSObject, NSApplicationDelegate {
     func refreshBar() {
         let displays = displays()
         let live = Set(bindings.keys)
+        let areas = state.areas(displays: displays)
         var screens: [String: [Bar.Item]] = [:]
         for display in displays {
             guard let setup = state.profile(for: displays)?.screens[display.id] else { continue }
             let showing = Set(state.visible(on: display, displays: displays))
             screens[display.id] = setup.categories.compactMap { id in
                 guard let category = state.category(id) else { return nil }
-                let used = Set(state.windows.filter { $0.category == id && live.contains($0.id) && bindings[$0.id]?.minimized == false }.map(\.workspace))
-                return Bar.Item(category: category, workspace: state.workspace(of: id, on: display, displays: displays), used: used,
+                let mine = state.windows.filter { $0.category == id && live.contains($0.id) }
+                let used = Set(mine.map(\.workspace))
+                let minimized = Set(mine.filter { bindings[$0.id]?.minimized == true }.map(\.workspace))
+                    .subtracting(mine.filter { bindings[$0.id]?.minimized == false }.map(\.workspace))
+                let letter = areas.first { $0.display == display.id && $0.category == id }?.letter ?? category.letter
+                return Bar.Item(category: category, letter: letter, workspace: state.workspace(of: id, on: display, displays: displays), used: used,
+                                minimized: minimized,
                                 focused: state.focusedCategory == id && enabled, showing: showing.contains(id))
             }
         }
@@ -825,7 +841,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         model.waiting = rex.board.attention.count
         model.working = rex.board.working.count
         model.awake = awake != nil
-        model.chord = chordCategory
+        model.chord = chordCategory.map { "\(chordDisplay ?? "")|\($0)" }
         model.restores = [:]
         for (key, _) in state.overrides {
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
@@ -880,6 +896,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             }
         }
         model.unplaced = profile?.unplaced ?? []
+        model.letters = Dictionary(uniqueKeysWithValues: state.areas(displays: displays).map { ("\($0.display)|\($0.category)", $0.letter) })
         model.windows = state.windows.filter { bindings[$0.id] != nil }.map { record in
             let app = NSRunningApplication.runningApplications(withBundleIdentifier: record.appID).first
             return Setup.Window(id: record.id, app: app?.localizedName ?? record.appID, title: record.title, icon: app?.icon,
@@ -1142,26 +1159,58 @@ final class Controller: NSObject, NSApplicationDelegate {
         case 301: jumpToMostUrgent()
         case 500..<600:
             let index = Int(id - 500)
-            guard state.categories.indices.contains(index) else { return }
-            focusCategory(state.categories[index].id)
-            armChord(state.categories[index].id)
+            if areaKeys.indices.contains(index) { focusArea(areaKeys[index]) }
+            else if spareKeys.indices.contains(index - areaKeys.count) {
+                // A category on no monitor comes to the one you're on.
+                let category = spareKeys[index - areaKeys.count]
+                focusCategory(category)
+                armChord(category, display: target(for: category)?.id)
+            }
         case 600..<700:
             let index = Int(id - 600)
-            if state.categories.indices.contains(index) { moveFocused(toCategory: state.categories[index].id) }
+            if areaKeys.indices.contains(index) { moveFocused(toArea: areaKeys[index]) }
+            else if spareKeys.indices.contains(index - areaKeys.count) { moveFocused(toCategory: spareKeys[index - areaKeys.count]) }
         case 700..<800:
             let index = Int(id - 700)
-            if state.categories.indices.contains(index) { placeOnFocusedScreen(state.categories[index].id) }
+            if areaKeys.indices.contains(index) { placeOnFocusedScreen(areaKeys[index].category) }
+            else if spareKeys.indices.contains(index - areaKeys.count) { placeOnFocusedScreen(spareKeys[index - areaKeys.count]) }
         case 801...809:
-            if let category = chordCategory { selectWorkspace(Int(id - 800), in: category) }
+            if let category = chordCategory {
+                selectWorkspace(Int(id - 800), in: category, on: displays().first { $0.id == chordDisplay })
+            }
             endChord()
         default: break
         }
     }
 
-    // After Option-<letter>, a bare digit within 1.2 seconds picks that category's workspace.
-    func armChord(_ category: String) {
+    // Option-<letter> brings that area forward on its monitor (switching a one-at-a-time monitor to
+    // it), and a digit right after picks its workspace.
+    func focusArea(_ area: DesktopState.Area) {
+        guard enabled, let display = displays().first(where: { $0.id == area.display }) else { return }
+        remember()
+        state.focus(area.category, on: display, displays: displays())
+        reconcile()
+        raiseCurrent(in: area.category, on: display)
+        armChord(area.category, display: area.display)
+    }
+
+    // Moves the focused window into an area: that category, a workspace of its own, on that monitor.
+    func moveFocused(toArea area: DesktopState.Area) {
+        guard enabled, let id = focusedID, let display = displays().first(where: { $0.id == area.display }) else { return }
+        let number = state.freeWorkspace(in: area.category, live: Set(bindings.keys).subtracting([id]))
+        state.exchange(id, category: area.category, workspace: number, live: Set(bindings.keys))
+        state.select(workspace: number, in: area.category, on: display, displays: displays())
+        state.focusedWindow = id
+        applied.removeAll()
+        reconcile()
+        if let window = bindings[id] { MacDesktop.raise(window) }
+    }
+
+    // After Option-<letter>, a bare digit within 1.2 seconds picks that area's workspace.
+    func armChord(_ category: String, display: String? = nil) {
         endChord()
         chordCategory = category
+        chordDisplay = display
         chordKeys = Self.digitCodes.enumerated().compactMap { index, code in register(id: UInt32(801 + index), key: code, modifiers: 0) }
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.endChord() } }
         chordTimer = work
@@ -1173,7 +1222,18 @@ final class Controller: NSObject, NSApplicationDelegate {
         chordTimer?.cancel()
         chordKeys.forEach { UnregisterEventHotKey($0) }
         chordKeys.removeAll()
-        if chordCategory != nil { chordCategory = nil; refreshBar() }
+        if chordCategory != nil { chordCategory = nil; chordDisplay = nil; refreshBar() }
+    }
+
+    // Area keys change when categories move between monitors or monitors come and go.
+    func refreshKeys() {
+        guard enabled else { return }
+        let areas = state.areas(displays: displays())
+        let placed = Set(areas.map(\.category))
+        let spare = state.categories.map(\.id).filter { !placed.contains($0) }
+        guard areas != areaKeys || spare != spareKeys else { return }
+        unregisterHotKeys()
+        try? registerHotKeys()
     }
 
     func installHotKeyHandler() {
@@ -1212,8 +1272,12 @@ final class Controller: NSObject, NSApplicationDelegate {
                      (207, 4, option), (208, 38, option), (209, 40, option), (210, 37, option),
                      (211, 4, shift), (212, 38, shift), (213, 40, shift), (214, 37, shift),
                      (215, 12, option), (216, 12, shift), (217, 49, option), (218, 1, control)]
-        for (index, category) in state.categories.enumerated().prefix(99) {
-            guard let letter = category.letter.lowercased().first, let code = Self.letterCodes[letter] else { continue }
+        areaKeys = state.areas(displays: displays())
+        let placed = Set(areaKeys.map(\.category))
+        spareKeys = state.categories.map(\.id).filter { !placed.contains($0) }
+        let letters = areaKeys.map(\.letter) + spareKeys.compactMap { state.category($0)?.letter }
+        for (index, letter) in letters.enumerated().prefix(99) {
+            guard let code = letter.lowercased().first.flatMap({ Self.letterCodes[$0] }) else { continue }
             requests += [(UInt32(500 + index), code, option), (UInt32(600 + index), code, shift), (UInt32(700 + index), code, control)]
         }
         var refused: [UInt32] = []

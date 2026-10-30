@@ -30,6 +30,8 @@ final class Setup {
         var profile = ""
         var screens: [Screen] = []
         var unplaced: [String] = []
+        // "displayID|categoryID" → that area's Option-letter.
+        var letters: [String: String] = [:]
         var categories: [WorkspaceCore.Category] = []
         var workspaces: [String: Int] = [:]
         // "category|displayID" → the workspace that screen shows.
@@ -451,7 +453,13 @@ struct Arrangement: View {
                         let area = "\(screen.id)|\(id)"
                         VStack(spacing: 3) {
                             Image(systemName: category.icon).font(.system(size: 13, weight: .semibold))
-                            Text(category.name).font(.system(size: 11, weight: .semibold))
+                            HStack(spacing: 4) {
+                                Text("⌥\((model.letters[area] ?? category.letter).uppercased())")
+                                    .font(.system(size: 9.5, weight: .heavy).monospaced())
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Color(hex: category.color), in: .rect(cornerRadius: 3))
+                                Text(category.name).font(.system(size: 11, weight: .semibold))
+                            }
                             Text(windows.isEmpty ? "Empty" : "\(windows.first!.app) · \(workspace)")
                                 .font(.system(size: 9.5)).foregroundStyle(.secondary).lineLimit(1)
                             pills(category: category, screen: screen.id, current: workspace)
@@ -656,11 +664,19 @@ struct ShortcutsTab: View {
         ScrollView {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 14) {
-                    section("Categories", model.categories.map { ("⌥\($0.letter.uppercased())", "\($0.name), then 1–9 for its workspace") })
+                    section("Areas", model.screens.flatMap { screen in
+                        screen.categories.compactMap { id -> (String, String)? in
+                            guard let category = model.categories.first(where: { $0.id == id }) else { return nil }
+                            let letter = (model.letters["\(screen.id)|\(id)"] ?? category.letter).uppercased()
+                            return ("⌥\(letter)", "\(category.name) on \(screen.name), then 1–9")
+                        }
+                    } + model.unplaced.compactMap { id in
+                        model.categories.first { $0.id == id }.map { ("⌥\($0.letter.uppercased())", "\($0.name): bring it to this monitor") }
+                    })
                     section("Workspaces", [
                         ("⌥1 … ⌥9", "Workspace of the focused category"),
                         ("⌥⇧1 … ⌥⇧9", "Move the window to a workspace"),
-                        ("⌥⇧ letter", "Move the window to a category"),
+                        ("⌥⇧ letter", "Move the window into that area"),
                         ("⌥Tab", "Next workspace with a window"),
                         ("⌥Space", "Back to where you were"),
                     ])

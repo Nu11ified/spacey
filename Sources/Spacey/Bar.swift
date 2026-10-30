@@ -151,7 +151,8 @@ struct BarView: View {
     func categoryChip(_ item: Bar.Item) -> some View {
         let color = Color(hex: item.category.color)
         let armed = model.chord == item.category.id
-        let numbers = armed ? Array(1...9) : item.used.union([item.workspace]).sorted()
+        // Only workspaces with a window; an emptied one disappears as soon as its window goes.
+        let numbers = armed ? Array(1...9) : item.used.sorted()
         return HStack(spacing: 2) {
             Button { category(item.category.id) } label: {
                 HStack(spacing: 5) {

@@ -22,7 +22,13 @@ final class Controller: NSObject, NSApplicationDelegate {
     var chordCategory: String?
     var chordTimer: DispatchWorkItem?
     var hotKeyHandler: EventHandlerRef?
+    // Windows that refused their tile size four times in a row: they sit centred in their spot.
     var failedFrames: Set<UUID> = []
+    var failures: [UUID: Int] = [:]
+    // A window moved while a mouse button was down; the next pass treats the release as a drop.
+    var dragging = false
+    var safety: Timer?
+    var safetyTicks = 0
     var applied: [UUID: Frame] = [:]
     var lastError: String?
     var accessTimer: Timer?
@@ -31,6 +37,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     var classifying: Set<UUID> = []
     // Windows on screen after the last pass, to tell a window coming from offscreen.
     var lastShown: Set<UUID> = []
+    var lastMinimized: Set<UUID> = []
     let rex = RexBridge()
     let overlays = Overlays()
     let dock = Dock()
@@ -130,6 +137,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             try registerHotKeys()
             enabled = true
             lastError = nil
+            startSafetyPass()
             reconcile()
         } catch { lastError = error.localizedDescription }
         refresh()
@@ -149,6 +157,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func pause() {
         enabled = false
+        safety?.invalidate()
         accessTimer?.invalidate()
         pending?.cancel()
         unregisterHotKeys()
@@ -284,8 +293,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     func reconcile(adoptFocus: Bool = false) {
         guard enabled else { return }
         guard MacDesktop.trusted else { lastError = DesktopError.accessibility.localizedDescription; pause(); return }
-        // Never fight a drag or a resize in progress.
-        if NSEvent.pressedMouseButtons != 0 { schedule(delay: 0.3); return }
+        // Never fight a drag or a resize in progress; snap as soon as it's let go.
+        if NSEvent.pressedMouseButtons != 0 { dragging = true; schedule(delay: 0.12); return }
         // A fullscreen window lives in its own Space; leave everything alone until it exits.
         if MacDesktop.focusedIsFullscreen() { refresh(); return }
         let displays = displays()
@@ -320,9 +329,22 @@ final class Controller: NSObject, NSApplicationDelegate {
             adopt(id, displays: displays)
         }
         state.pruneOverrides(live: Set(bindings.keys), displays: displays)
+        if dragging {
+            dragging = false
+            swapDropped()
+        }
+        // Windows that were on screen and are now closed or minimized take their empty workspace with them.
+        let visible = Set(bindings.filter { !$0.value.minimized }.keys)
+        for id in lastShown where !visible.contains(id) {
+            if let record = state.record(id) {
+                state.fallBack(from: record.category, workspace: record.workspace, visible: visible, displays: displays)
+            }
+        }
         let live = bindings.map { LiveWindow(id: $0.key, frame: $0.value.frame, minimized: $0.value.minimized) }
         let plan = state.plan(displays: displays, live: live, gap: config.gap)
         lastShown = Set(plan.filter { !$0.hidden }.map(\.id))
+        lastMinimized = Set(bindings.filter { $0.value.minimized }.keys)
+        var retry = false
         do {
             try store.save(state)
             for placement in plan {
@@ -345,16 +367,30 @@ final class Controller: NSObject, NSApplicationDelegate {
                         state.minimizedByManager.remove(placement.id)
                     }
                     state.parkedByManager[placement.id] = nil
-                    guard let target = placement.frame, !failedFrames.contains(placement.id) else { continue }
+                    guard let target = placement.frame else { continue }
+                    // Fixed-size windows (System Settings, dialogs) can't fill a tile; they stay centred
+                    // in their spot, and are put back there if moved.
+                    if failedFrames.contains(placement.id) {
+                        let centred = Frame(x: target.midX - window.frame.width / 2, y: max(target.y, target.midY - window.frame.height / 2),
+                                            width: window.frame.width, height: window.frame.height)
+                        if !MacDesktop.near(window.frame, centred) { MacDesktop.setPosition(window, centred) }
+                        continue
+                    }
                     // Terminals snap to whole cells; once a target was applied, near enough is done.
                     if applied[placement.id] == target, MacDesktop.near(window.frame, target) { continue }
-                    do { try MacDesktop.setFrame(window, target); applied[placement.id] = target }
-                    catch {
-                        // Fixed-size windows (System Settings, dialogs) float, centred in their area.
-                        failedFrames.insert(placement.id)
-                        if let actual = MacDesktop.frame(window.element) {
-                            MacDesktop.setPosition(window, Frame(x: target.midX - actual.width / 2, y: max(target.y, target.midY - actual.height / 2),
-                                                                 width: actual.width, height: actual.height))
+                    do {
+                        try MacDesktop.setFrame(window, target)
+                        applied[placement.id] = target
+                        failures[placement.id] = nil
+                    } catch {
+                        // New windows often fight their first resize while they open. Try again shortly,
+                        // and only treat the window as fixed-size after four refusals in a row.
+                        failures[placement.id, default: 0] += 1
+                        if failures[placement.id]! >= 4 {
+                            failures[placement.id] = nil
+                            failedFrames.insert(placement.id)
+                        } else {
+                            retry = true
                         }
                     }
                 }
@@ -364,14 +400,48 @@ final class Controller: NSObject, NSApplicationDelegate {
             lastError = error.localizedDescription
             pause()
         }
+        if retry { schedule(delay: 0.6) }
         installAXObservers()
         refresh()
+    }
+
+    // Like Hyprland, a window let go over another window swaps places with it; anywhere else it
+    // just snaps back into its tile.
+    func swapDropped() {
+        let main = CGDisplayBounds(CGMainDisplayID())
+        let mouse = NSEvent.mouseLocation
+        let x = mouse.x, y = main.height - mouse.y
+        for (id, window) in bindings {
+            guard let target = applied[id], lastShown.contains(id), let frame = MacDesktop.frame(window.element),
+                  !MacDesktop.near(frame, target), !target.contains(x: x, y: y) else { continue }
+            if let other = applied.first(where: { $0.key != id && lastShown.contains($0.key) && $0.value.contains(x: x, y: y) })?.key {
+                state.swap(id, other)
+                applied.removeAll()
+            }
+            return
+        }
+    }
+
+    // A pass every five seconds catches whatever slipped by: an app moving its own window, a missed
+    // event, a new window settling. Windows already in place aren't touched. Every thirty seconds,
+    // windows that refused to resize get another try.
+    func startSafetyPass() {
+        safety?.invalidate()
+        safety = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.enabled else { return }
+                self.safetyTicks += 1
+                if self.safetyTicks % 6 == 0 { self.failedFrames.removeAll() }
+                self.schedule(delay: 0)
+            }
+        }
     }
 
     // Focus moved to `id`. A window that was offscreen (a link opened from Slack, Cmd-Tab, a new
     // window) comes into the area you were working in; the bar then offers to put that area back.
     func adopt(_ id: UUID, displays: [Display]) {
-        guard !lastShown.isEmpty, !lastShown.contains(id), let previous = state.focusedWindow, lastShown.contains(previous),
+        guard !lastShown.isEmpty, !lastShown.contains(id), !lastMinimized.contains(id),
+              let previous = state.focusedWindow, lastShown.contains(previous),
               let frame = bindings[previous].flatMap({ MacDesktop.frame($0.element) }),
               let display = displays.first(where: { $0.frame.contains(x: frame.midX, y: frame.midY) }),
               let record = state.record(previous), let window = state.record(id) else {
@@ -741,7 +811,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             let showing = Set(state.visible(on: display, displays: displays))
             screens[display.id] = setup.categories.compactMap { id in
                 guard let category = state.category(id) else { return nil }
-                let used = Set(state.windows.filter { $0.category == id && live.contains($0.id) }.map(\.workspace))
+                let used = Set(state.windows.filter { $0.category == id && live.contains($0.id) && bindings[$0.id]?.minimized == false }.map(\.workspace))
                 return Bar.Item(category: category, workspace: state.workspace(of: id, on: display, displays: displays), used: used,
                                 focused: state.focusedCategory == id && enabled, showing: showing.contains(id))
             }

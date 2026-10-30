@@ -130,6 +130,18 @@ let checks: [(String, () throws -> Void)] = [
         state.pruneOverrides(live: Set([slack]), displays: desk)
         try expect(state.overrides.isEmpty)
     }),
+    ("Closing a window moves its area to the nearest workspace that still has one", {
+        var (state, slack, zen1, zen2, rex) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
+        state.fallBack(from: "browser", workspace: 2, visible: [slack, zen1, rex], displays: desk)
+        try expect(state.workspace(of: "browser") == 1)
+        // Nothing left in Comms: the area gives its space to Browser.
+        state.fallBack(from: "comms", workspace: 1, visible: [zen1, rex], displays: desk)
+        var shown = state
+        shown.windows.removeAll { $0.id == slack || $0.id == zen2 }
+        let plan = shown.plan(displays: desk, live: live(shown))
+        try expect(try frame(zen1, plan).unwrap().height > portrait.frame.height * 0.9)
+    }),
     ("Picking a workspace changes only that category", {
         var (state, slack, zen1, zen2, _) = deskState()
         state.select(workspace: 2, in: "browser", displays: desk)

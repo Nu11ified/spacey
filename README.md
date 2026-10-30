@@ -58,6 +58,17 @@ appearing somewhere else. That monitor's bar then shows a **↩** button with
 what the area showed before, such as ↩ Comms 1, and clicking it puts that back.
 Picking a workspace for that area also ends the takeover.
 
+Windows always snap to their tiles, as in Hyprland. Let go of a dragged window
+and it snaps back; drop it on another window and the two swap places, even
+across monitors. Resizing one by hand snaps it back too. A window that refuses
+its size is retried, and only one that keeps refusing (System Settings, some
+dialogs) sits centred in its spot instead. A pass every five seconds puts back
+anything that slipped.
+
+Closing or minimizing a window takes its workspace with it: the area moves to
+the nearest workspace of that category that still has a window, or gives its
+space away. The bar only lists workspaces that have a window.
+
 Windows in workspaces that aren't showing are parked just past a screen corner,
 so switching is instant. Fullscreen windows are left alone, and the bar and
 dock stay out of their Space.

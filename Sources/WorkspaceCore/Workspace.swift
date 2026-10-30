@@ -252,6 +252,21 @@ public struct DesktopState: Codable, Equatable, Sendable {
         }
     }
 
+    // A window in `category`'s `workspace` was closed or minimized. Screens showing that workspace,
+    // now empty, move to the nearest workspace of the category that still has a window and isn't
+    // showing elsewhere. With nothing left, the area simply gives its space away.
+    public mutating func fallBack(from category: String, workspace number: Int, visible: Set<UUID>, displays: [Display]) {
+        let hosts = hosts(of: category, displays: displays)
+        let occupied = Set(windows.filter { $0.category == category && visible.contains($0.id) }.map(\.workspace))
+        guard !occupied.contains(number) else { return }
+        for host in hosts where workspace(of: category, on: host, displays: displays) == number {
+            let elsewhere = Set(hosts.filter { $0.id != host.id }.map { workspace(of: category, on: $0, displays: displays) })
+            let candidates = occupied.subtracting(elsewhere).sorted { abs($0 - number) == abs($1 - number) ? $0 < $1 : abs($0 - number) < abs($1 - number) }
+            guard let next = candidates.first else { continue }
+            if hosts.count > 1 { select(workspace: next, in: category, on: host, displays: displays) } else { workspaces[category] = next }
+        }
+    }
+
     // MARK: Categories on several screens
 
     // The screens a category is on, left to right.

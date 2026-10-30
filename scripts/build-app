@@ -30,7 +30,7 @@ if [ "${1:-}" = "--install" ]; then
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$target"
   # Only the installed copy should answer spacey:// links.
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$bundle" 2>/dev/null || true
-  open -gj "$target"
+  open -g "$target"
   bundle="$target"
 fi
 printf '%s\n' "$bundle"

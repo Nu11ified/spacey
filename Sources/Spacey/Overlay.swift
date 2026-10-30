@@ -23,6 +23,8 @@ final class GlassPanel: NSPanel {
         hasShadow = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
+        // Overlays stay up even if Spacey is hidden (open -j, Hide Others).
+        canHide = false
         collectionBehavior = behavior
         let host = ClickThroughHostingView(rootView: content)
         host.sizingOptions = fitsContent ? [.intrinsicContentSize] : []

@@ -5,7 +5,7 @@ import SwiftUI
 import WorkspaceCore
 
 // The top bar, one per screen. Each screen's bar lists the categories that live on it with their
-// workspaces; the main screen also shows the focused window, Rex, keep-awake, battery and the clock.
+// workspaces; the main screen also shows Rex, keep-awake, battery and the clock.
 // The macOS menu bar stays hidden until the pointer touches the top edge.
 @MainActor
 final class Bar {
@@ -32,8 +32,6 @@ final class Bar {
         var screens: [String: [Item]] = [:]
         var enabled = true
         var solo = false
-        var title = ""
-        var appIcon: NSImage?
         var waiting = 0
         var working = 0
         var awake = false
@@ -66,7 +64,6 @@ final class Bar {
             keep.insert(display.id)
             let panel = panels[display.id] ?? {
                 let view = BarView(model: model, display: display.id, main: screen == NSScreen.screens.first,
-                                   notch: screen.safeAreaInsets.top > 0,
                                    category: { [weak self] in self?.onCategory($0) },
                                    workspace: { [weak self] in self?.onWorkspace($0, $1, display.id) },
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
@@ -114,8 +111,6 @@ struct BarView: View {
     var model: Bar.Model
     var display: String
     var main: Bool
-    // The notch hides whatever is centred, so the title moves next to the categories.
-    var notch: Bool
     var category: (String) -> Void
     var workspace: (String, Int) -> Void
     var menu: (NSView) -> Void
@@ -127,12 +122,6 @@ struct BarView: View {
         HStack(spacing: 6) {
             ForEach(model.screens[display] ?? [], id: \.category.id) { item in categoryChip(item) }
                 .fixedSize()
-            if main {
-                Spacer(minLength: 16).frame(maxWidth: notch ? 16 : .infinity)
-                focused
-                    .layoutPriority(-1)
-                    .frame(maxWidth: notch ? 260 : 560, alignment: notch ? .leading : .center)
-            }
             Spacer(minLength: 16)
             HStack(spacing: 8) { status }
                 .fixedSize()
@@ -185,24 +174,12 @@ struct BarView: View {
         .animation(.easeOut(duration: 0.15), value: item.workspace)
     }
 
-    var focused: some View {
-        HStack(spacing: 6) {
-            if let icon = model.appIcon {
-                Image(nsImage: icon).resizable().interpolation(.high).frame(width: 14, height: 14)
-            }
-            Text(model.title)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .opacity(0.75)
-            if model.solo {
-                Image(systemName: "scope").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.yellow)
-            }
-        }
-    }
-
     @ViewBuilder
     var status: some View {
+        if model.solo {
+            Image(systemName: "scope").font(.system(size: 11, weight: .semibold)).foregroundStyle(.yellow)
+                .help("Showing one window — Option-F to show the rest")
+        }
         if model.waiting > 0 || model.working > 0 {
             Button(action: rex) {
                 Chip(tint: model.waiting > 0 ? .orange : nil) {

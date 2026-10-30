@@ -399,19 +399,16 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         for pid in pids where axObservers[pid] == nil {
             var observer: AXObserver?
-            let callback: AXObserverCallback = { _, _, notification, context in
+            let callback: AXObserverCallback = { _, _, _, context in
                 guard let context else { return }
-                let title = (notification as String) == kAXTitleChangedNotification
                 MainActor.assumeIsolated {
-                    let controller = Unmanaged<Controller>.fromOpaque(context).takeUnretainedValue()
-                    if title { controller.titleChanged() } else { controller.schedule() }
+                    Unmanaged<Controller>.fromOpaque(context).takeUnretainedValue().schedule()
                 }
             }
             guard AXObserverCreate(pid, callback, &observer) == .success, let observer else { continue }
             let app = AXUIElementCreateApplication(pid)
             for name in [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification, kAXUIElementDestroyedNotification,
-                         kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification, kAXWindowMovedNotification,
-                         kAXTitleChangedNotification] {
+                         kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification, kAXWindowMovedNotification] {
                 _ = AXObserverAddNotification(observer, app, name as CFString, Unmanaged.passUnretained(self).toOpaque())
             }
             CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -566,13 +563,6 @@ final class Controller: NSObject, NSApplicationDelegate {
         reconcile()
     }
 
-    // Updates just the bar's title, without a full pass over every window.
-    func titleChanged() {
-        guard let app = NSWorkspace.shared.frontmostApplication, let element = MacDesktop.focusedElement() else { return }
-        bar.model.title = MacDesktop.attribute(element, kAXTitleAttribute) as? String ?? app.localizedName ?? ""
-        bar.model.appIcon = app.icon
-    }
-
     func open(app bundleID: String) {
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
             running.activate()
@@ -720,7 +710,6 @@ final class Controller: NSObject, NSApplicationDelegate {
         model.working = rex.board.working.count
         model.awake = awake != nil
         model.chord = chordCategory
-        titleChanged()
         bar.layout(displays: displays)
     }
 

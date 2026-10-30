@@ -60,8 +60,8 @@ dock stay out of their Space.
 
 Each monitor's bar lists the categories on that monitor: the letter, the name,
 and the workspaces that hold windows, with the current workspace filled. Click a
-category or a number to switch. The main screen also shows the focused window,
-Rex status, keep-awake, battery and the clock. Click the clock for Spacey's
+category or a number to switch. The main screen also shows Rex status,
+keep-awake, battery and the clock. Click the clock for Spacey's
 menu. The macOS menu bar slides in when the pointer reaches the top edge.
 
 The dock on the main screen shows the categories and the apps in the focused

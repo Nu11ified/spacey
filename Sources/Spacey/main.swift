@@ -33,6 +33,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     let overlays = Overlays()
     let dock = Dock()
     let bar = Bar()
+    let setup = Setup()
     var menu = NSMenu()
 
     init(store: StateStore, configURL: URL) throws {
@@ -67,6 +68,8 @@ final class Controller: NSObject, NSApplicationDelegate {
             if self.rex.board.attention.isEmpty { self.toggleInbox() } else { self.jumpToMostUrgent() }
         }
         bar.onAwake = { [weak self] in self?.toggleAwake() }
+        bar.onSetup = { [weak self] in self?.toggleSetup() }
+        setup.actions = setupActions()
         startRex()
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
@@ -200,7 +203,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { if enabled { pause() } }
 
     // spacey://focus/browser, spacey://workspace/browser/2, spacey://move/comms, spacey://solo,
-    // spacey://pause, spacey://resume, spacey://reload, spacey://inbox, spacey://jump, spacey://awake
+    // spacey://pause, spacey://resume, spacey://reload, spacey://inbox, spacey://jump, spacey://awake,
+    // spacey://setup/1 (0 screens, 1 categories, 2 shortcuts)
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: text), url.scheme == "spacey" else { return }
@@ -218,6 +222,9 @@ final class Controller: NSObject, NSApplicationDelegate {
         case "inbox": toggleInbox()
         case "jump": jumpToMostUrgent()
         case "awake": toggleAwake()
+        case "setup":
+            if let tab = parts.first.flatMap(Int.init) { setup.model.tab = tab }
+            if !setup.isOpen { toggleSetup() } else { refreshSetup() }
         default: break
         }
     }
@@ -561,6 +568,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     }
 
     func refresh() {
+        refreshSetup()
         rebuildMenu()
         refreshBar()
         refreshDock()
@@ -586,6 +594,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let displays = displays()
         let profile = state.profile(for: displays)
+        menu.addItem(item("Set up Spacey…  ⌥,", #selector(toggleSetup), symbol: "square.grid.2x2"))
+        menu.addItem(.separator())
         menu.addItem(header("Profile: \(profile?.name ?? "—")"))
         menu.addItem(item("Rename profile…", #selector(renameProfile), symbol: "pencil"))
         menu.addItem(.separator())
@@ -701,6 +711,102 @@ final class Controller: NSObject, NSApplicationDelegate {
                     hidden: enabled && MacDesktop.focusedIsFullscreen())
     }
 
+    // MARK: Setup window
+
+    @objc func toggleSetup() {
+        refreshSetup(force: true)
+        setup.toggle()
+    }
+
+    func refreshSetup(force: Bool = false) {
+        guard force || setup.isOpen else { return }
+        let displays = displays()
+        let profile = state.profile(for: displays)
+        let model = setup.model
+        model.profile = profile?.name ?? ""
+        model.screens = displays.map { display in
+            let screen = profile?.screens[display.id]
+            return Setup.Screen(id: display.id, name: display.name, frame: display.frame, split: screen?.split ?? true,
+                                categories: screen?.categories ?? [])
+        }
+        model.categories = state.categories
+        model.workspaces = Dictionary(uniqueKeysWithValues: state.categories.map { ($0.id, state.workspace(of: $0.id)) })
+        model.windows = state.windows.filter { bindings[$0.id] != nil }.map { record in
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: record.appID).first
+            return Setup.Window(id: record.id, app: app?.localizedName ?? record.appID, title: record.title, icon: app?.icon,
+                                category: record.category, workspace: record.workspace)
+        }
+        model.intelligence = Advisor.status
+        model.intelligenceAvailable = Advisor.available
+        model.error = lastError
+    }
+
+    func setupActions() -> Setup.Actions {
+        var actions = Setup.Actions()
+        actions.place = { [weak self] category, displayID in
+            guard let self, let display = self.displays().first(where: { $0.id == displayID }) else { return }
+            self.state.place(category, on: display, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.split = { [weak self] displayID, split in
+            guard let self else { return }
+            let key = DesktopState.topologyKey(self.displays())
+            self.state.profiles[key]?.screens[displayID]?.split = split
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.move = { [weak self] id, category, workspace in
+            guard let self else { return }
+            self.state.move(window: id, to: category)
+            self.state.move(window: id, toWorkspace: workspace)
+            self.state.follow(id, displays: self.displays())
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.raise = { [weak self] id in
+            guard let self, let window = self.bindings[id] else { return }
+            self.state.follow(id, displays: self.displays())
+            self.reconcile()
+            MacDesktop.raise(window)
+        }
+        actions.showWorkspace = { [weak self] category, number in self?.selectWorkspace(number, in: category) }
+        actions.rename = { [weak self] id, name in
+            guard let self, let index = self.state.categories.firstIndex(where: { $0.id == id }),
+                  !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            self.state.categories[index].name = name.trimmingCharacters(in: .whitespaces)
+            try? self.store.save(self.state)
+            self.refresh()
+        }
+        actions.add = { [weak self] name in
+            guard let self else { return }
+            guard self.state.addCategory(named: name, color: Advisor.colors[self.state.categories.count % Advisor.colors.count]) != nil else {
+                self.lastError = "Couldn't add \(name): the name is taken or no letter is free."
+                self.refresh()
+                return
+            }
+            self.lastError = nil
+            self.state.ensureProfile(displays: self.displays())
+            if self.enabled { self.unregisterHotKeys(); try? self.registerHotKeys() }
+            self.reconcile()
+        }
+        actions.remove = { [weak self] id in
+            guard let self else { return }
+            self.state.removeCategory(id, displays: self.displays())
+            if self.enabled { self.unregisterHotKeys(); try? self.registerHotKeys() }
+            self.applied.removeAll()
+            self.reconcile()
+        }
+        actions.renameProfile = { [weak self] name in
+            guard let self, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            self.state.profiles[DesktopState.topologyKey(self.displays())]?.name = name
+            try? self.store.save(self.state)
+            self.refresh()
+        }
+        actions.regroup = { [weak self] in self?.regroup() }
+        return actions
+    }
+
     func ask(_ title: String, value: String) -> String? {
         NSApp.activate()
         let alert = NSAlert()
@@ -773,10 +879,9 @@ final class Controller: NSObject, NSApplicationDelegate {
         overlays.onJump = { [weak self] pane in self?.jump(to: pane) }
         rex.onChange = { [weak self] change in self?.rexChanged(change) }
         installHotKeyHandler()
-        alwaysHotKeys = [(300, UInt32(optionKey)), (301, UInt32(optionKey | shiftKey))].compactMap { id, modifiers in
-            register(id: id, key: 50, modifiers: modifiers)
-        }
-        if alwaysHotKeys.count < 2 { lastError = "Option-` is taken by another app; use the menu for the Rex inbox." }
+        alwaysHotKeys = [(300, 50, UInt32(optionKey)), (301, 50, UInt32(optionKey | shiftKey)), (219, 43, UInt32(optionKey))]
+            .compactMap { id, key, modifiers in register(id: id, key: key, modifiers: modifiers) }
+        if alwaysHotKeys.count < 3 { lastError = "Option-` is taken by another app; use the menu for the Rex inbox." }
         rex.start()
     }
 
@@ -846,6 +951,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         case 216: NSWorkspace.shared.frontmostApplication?.terminate()
         case 217: if let previous { selectWorkspace(previous.workspace, in: previous.category) }
         case 218: toggleSplit()
+        case 219: toggleSetup()
         case 300: toggleInbox()
         case 301: jumpToMostUrgent()
         case 500..<600:

@@ -11,6 +11,14 @@ suite.
 
 ## Categories, workspaces and profiles
 
+Open **Set up Spacey** (Option-Comma, or the grid button in the bar) to see
+everything in one place: your monitors drawn to scale with the categories on
+each, every category's nine workspaces and the windows in them, and every
+shortcut. From there you can add a category to a monitor or move it to another
+one, switch a monitor between side by side and one at a time, move any window
+to any category and workspace (a workspace can hold several), and rename, add
+or delete categories.
+
 Windows are sorted into **categories**, such as Agents, Browser, Comms, Notes
 and Media. Each category has **workspaces 1–9**, and each workspace holds one
 window. A new window takes its category's next empty workspace.
@@ -81,6 +89,7 @@ follows Rex's event stream.
 | Option-F | Show only this window (again to undo) |
 | Option-S / Option-Shift-S | Stack / side by side within the category |
 | Option-Q / Option-Shift-Q | Close the window / quit the app |
+| Option-Comma | Set up Spacey: screens, categories, windows, shortcuts |
 | Option-` / Option-Shift-` | Rex inbox / jump to the most urgent pane |
 | Option-Control-Escape | Pause and put every window back |
 

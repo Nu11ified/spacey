@@ -125,6 +125,12 @@ let checks: [(String, () throws -> Void)] = [
         let placed = state.profile(for: desk)!.screens.values.flatMap(\.categories).sorted()
         try expect(placed == ["web", "work"])
     }),
+    ("Deleting a category keeps its windows", {
+        var (state, slack, _, _, _) = deskState()
+        state.removeCategory("comms", displays: desk)
+        try expect(state.category("comms") == nil && state.record(slack)?.category == "agents")
+        try expect(!state.profile(for: desk)!.screens.values.flatMap(\.categories).contains("comms"))
+    }),
     ("Category letters avoid the ones Spacey uses", {
         var state = DesktopState()
         let added = state.addCategory(named: "Focus")

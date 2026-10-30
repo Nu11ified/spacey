@@ -47,6 +47,7 @@ final class Bar {
     var onMenu: (NSView) -> Void = { _ in }
     var onRex: () -> Void = {}
     var onAwake: () -> Void = {}
+    var onSetup: () -> Void = {}
     private var panels: [String: GlassPanel] = [:]
     private var timer: Timer?
 
@@ -69,7 +70,7 @@ final class Bar {
                                    category: { [weak self] in self?.onCategory($0) },
                                    workspace: { [weak self] in self?.onWorkspace($0, $1) },
                                    menu: { [weak self] in self?.onMenu($0) }, rex: { [weak self] in self?.onRex() },
-                                   awake: { [weak self] in self?.onAwake() })
+                                   awake: { [weak self] in self?.onAwake() }, setup: { [weak self] in self?.onSetup() })
                 let panel = GlassPanel(view, fitsContent: false, behavior: [.canJoinAllSpaces, .stationary, .ignoresCycle])
                 panel.interactive = false
                 panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) - 1)
@@ -120,6 +121,7 @@ struct BarView: View {
     var menu: (NSView) -> Void
     var rex: () -> Void
     var awake: () -> Void
+    var setup: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -235,6 +237,13 @@ struct BarView: View {
                 .foregroundStyle(battery.percent <= 15 && !battery.charging ? AnyShapeStyle(.red) : AnyShapeStyle(.white.opacity(0.7)))
             }
         }
+        Button(action: setup) {
+            Image(systemName: "square.grid.2x2")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .buttonStyle(PressStyle())
+        .help("Set up Spacey — Option-Comma")
         Clock(open: menu)
     }
 

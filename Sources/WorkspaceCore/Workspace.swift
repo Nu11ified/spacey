@@ -320,6 +320,20 @@ public struct DesktopState: Codable, Equatable, Sendable {
         return new
     }
 
+    // Deletes a category; its windows move to the first remaining one. The last category stays.
+    public mutating func removeCategory(_ id: String, displays: [Display]) {
+        guard categories.count > 1, let index = categories.firstIndex(where: { $0.id == id }) else { return }
+        categories.remove(at: index)
+        let fallback = categories[0].id
+        for i in windows.indices where windows[i].category == id { windows[i].category = fallback }
+        if focusedCategory == id { focusedCategory = fallback }
+        workspaces[id] = nil
+        for key in profiles.keys {
+            for screen in profiles[key]!.screens.keys { profiles[key]!.screens[screen]!.categories.removeAll { $0 == id } }
+        }
+        ensureProfile(displays: displays)
+    }
+
     // Replaces the categories with a new set (from Apple Intelligence or the config) and re-sorts
     // every window by the apps each category claims. Profiles keep their screens; new categories
     // are spread over them by ensureProfile.

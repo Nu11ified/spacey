@@ -74,6 +74,16 @@ overrides both and teaches Spacey where that app belongs. Without Apple
 Intelligence, built-in knowledge of common apps does the sorting. The model
 sees only app names, bundle IDs and window titles, and nothing leaves the Mac.
 
+**Others** is the one category that doesn't tile. Finder, System Settings,
+Tailscale, Activity Monitor, password managers and similar small tools go
+there, along with any app's Settings window and windows from unsorted apps that
+can't be zoomed or are dialogs. Apple Intelligence sorts the rest. A window in
+Others opens in the middle of the screen you're working on, floating over your
+tiles without replacing anything. Minimize or close it and what was underneath is
+exactly as it was. Option-O hides every open Others window, or brings the last
+one back (with none open, it opens Finder). Drag a window onto Others in setup to
+float it, or press Option-Shift-letter to tile it into an area.
+
 When a window that isn't on screen comes forward (a link opened from Slack, Cmd-Tab,
 a new window), it **takes over the area you were working in** rather than
 appearing somewhere else. That monitor's bar then shows a **↩** button with
@@ -128,6 +138,7 @@ follows Rex's event stream.
 | Option-letter, then 1–9 | That area's workspace, within about a second (a minimized window comes back) |
 | Option-1 … 9 | Workspace of the focused category |
 | Option-Shift-letter | Move the focused window into that area |
+| Option-O | Show or hide the windows floating in Others |
 | Option-Shift-1 … 9 | Move the focused window to a workspace (swapping with what's there) |
 | Option-Control-letter | Put a category on the monitor you're on |
 | Option-Control-S | This monitor: side by side, or one category at a time |
@@ -165,7 +176,7 @@ S and Q are taken by other keys.
 
 Scripts can drive Spacey with URLs: `spacey://focus/browser`,
 `spacey://workspace/browser/2`, `spacey://move/comms`, `spacey://solo`,
-`spacey://pause`, `spacey://resume`, `spacey://reload`, `spacey://inbox`, `spacey://add/browser/2` and
+`spacey://others`, `spacey://pause`, `spacey://resume`, `spacey://reload`, `spacey://inbox`, `spacey://add/browser/2` and
 `spacey://remove/browser/2` (screens counted left to right), `spacey://restore`,
 `spacey://jump`, `spacey://awake`. `~/Library/Application
 Support/Spacey/status.json` reports the current state.

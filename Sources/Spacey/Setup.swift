@@ -285,7 +285,7 @@ struct ScreensTab: View {
                         chip(category, on: screen)
                     }
                 }
-                let missing = model.categories.filter { !screen.categories.contains($0.id) }
+                let missing = model.categories.filter { !screen.categories.contains($0.id) && !$0.overlay }
                 if !missing.isEmpty {
                     Menu {
                         ForEach(missing) { category in
@@ -692,7 +692,10 @@ struct CategoriesTab: View {
                     Text("Apple Intelligence: \(model.intelligence). Built-in app knowledge sorts new windows until then.")
                         .font(.system(size: 11.5)).foregroundStyle(.tertiary)
                 }
-                ForEach(model.categories) { category in CategoryCard(category: category, model: model, actions: actions) }
+                ForEach(model.categories) { category in
+                    if category.overlay { OverlayCard(category: category, model: model, actions: actions) }
+                    else { CategoryCard(category: category, model: model, actions: actions) }
+                }
             }
             .padding(22)
         }
@@ -818,24 +821,91 @@ struct CategoryCard: View {
     }
 }
 
+// Others: no workspaces, just the windows that float over your work.
+struct OverlayCard: View {
+    var category: WorkspaceCore.Category
+    var model: Setup.Model
+    var actions: Setup.Actions
+    @State private var targeted = false
+
+    var body: some View {
+        let windows = model.windows.filter { $0.category == category.id }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text(category.letter.uppercased())
+                    .font(.system(size: 12, weight: .heavy).monospaced())
+                    .frame(width: 22, height: 22)
+                    .background(Color(hex: category.color), in: .rect(cornerRadius: 6))
+                Image(systemName: category.icon).foregroundStyle(Color(hex: category.color))
+                Text(category.name).font(.system(size: 14, weight: .semibold))
+                Text("Floats over your work. ⌥\(category.letter.uppercased()) shows or hides it; minimizing puts it away.")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                Spacer()
+                Text("\(windows.count) window\(windows.count == 1 ? "" : "s")").font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            FlowLayout(spacing: 6) {
+                if windows.isEmpty {
+                    Text("Finder, settings and small tools land here. Drop any window here to float it.")
+                        .font(.system(size: 11.5)).foregroundStyle(.quaternary)
+                }
+                ForEach(windows) { window in
+                    Button { actions.raise(window.id) } label: {
+                        HStack(spacing: 5) {
+                            if let icon = window.icon { Image(nsImage: icon).resizable().frame(width: 14, height: 14) }
+                            Text(window.title.isEmpty ? window.app : window.title).font(.system(size: 11.5)).lineLimit(1)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(.white.opacity(0.06), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .draggable("window:\(window.id.uuidString)") {
+                        Text(window.title.isEmpty ? window.app : window.title).font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Color(hex: category.color).opacity(0.6), in: .capsule)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(.white.opacity(0.04), in: .rect(cornerRadius: 12))
+        .modifier(DropHighlight(active: targeted, color: Color(hex: category.color), radius: 12))
+        .dropDestination(for: String.self) { items, _ in
+            guard let item = items.first, case .window(let id)? = Payload(item) else { return false }
+            actions.move(id, category.id, 1)
+            return true
+        } isTargeted: { targeted = $0 }
+    }
+}
+
 // MARK: Shortcuts
 
 struct ShortcutsTab: View {
     var model: Setup.Model
 
+    var areaRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        for screen in model.screens {
+            for id in screen.categories {
+                guard let category = model.categories.first(where: { $0.id == id }) else { continue }
+                let letter = (model.letters["\(screen.id)|\(id)"] ?? category.letter).uppercased()
+                rows.append(("⌥\(letter)", "\(category.name) on \(screen.name), then 1–9"))
+            }
+        }
+        for category in model.categories where category.overlay {
+            rows.append(("⌥\(category.letter.uppercased())", "\(category.name): show or hide what floats over your work"))
+        }
+        for id in model.unplaced {
+            guard let category = model.categories.first(where: { $0.id == id }) else { continue }
+            rows.append(("⌥\(category.letter.uppercased())", "\(category.name): bring it to this monitor"))
+        }
+        return rows
+    }
+
     var body: some View {
         ScrollView {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 14) {
-                    section("Areas", model.screens.flatMap { screen in
-                        screen.categories.compactMap { id -> (String, String)? in
-                            guard let category = model.categories.first(where: { $0.id == id }) else { return nil }
-                            let letter = (model.letters["\(screen.id)|\(id)"] ?? category.letter).uppercased()
-                            return ("⌥\(letter)", "\(category.name) on \(screen.name), then 1–9")
-                        }
-                    } + model.unplaced.compactMap { id in
-                        model.categories.first { $0.id == id }.map { ("⌥\($0.letter.uppercased())", "\($0.name): bring it to this monitor") }
-                    })
+                    section("Areas", areaRows)
                     section("Workspaces", [
                         ("⌥1 … ⌥9", "Workspace of the focused category"),
                         ("⌥⇧1 … ⌥⇧9", "Move the window to a workspace"),

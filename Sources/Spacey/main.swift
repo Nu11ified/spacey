@@ -41,6 +41,9 @@ final class Controller: NSObject, NSApplicationDelegate {
     var classifying: Set<UUID> = []
     // Windows on screen after the last pass, to tell a window coming from offscreen.
     var lastShown: Set<UUID> = []
+    // Overlays on screen last pass; one that appears again is centred where you're working.
+    var overlaysShown: Set<UUID> = []
+    var lastOverlay: UUID?
     // The profile in use, to announce a switch when monitors come or go.
     var lastProfile: String?
     var lastMinimized: Set<UUID> = []
@@ -252,6 +255,7 @@ final class Controller: NSObject, NSApplicationDelegate {
                 if parts.count == 2 { restore(parts[1], onDisplay: parts[0]) }
             }
         case "solo": toggleSolo()
+        case "others": toggleOverlays()
         case "pause": if enabled { pause() }
         case "resume": if !enabled { start() }
         case "reload": reloadConfig()
@@ -321,7 +325,10 @@ final class Controller: NSObject, NSApplicationDelegate {
             if let index = state.windows.firstIndex(where: { $0.id == id }) {
                 state.windows[index].title = window.title
             } else {
-                let category = state.home(for: window.appID)
+                // Dialogs, settings and windows that can't be zoomed float in Others, whatever the app.
+                let claimed = state.categories.contains { $0.apps.contains(window.appID) }
+                let category = window.settings || window.fixedSize && !claimed
+                    ? state.others?.id ?? state.home(for: window.appID) : state.home(for: window.appID)
                 let live = Set(current.keys).union(bindings.keys)
                 state.windows.append(WindowRecord(id: id, appID: window.appID, title: window.title,
                                                   accessibilityID: window.identifier, category: category,
@@ -332,6 +339,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         let firstPass = bindings.isEmpty
         bindings = current
+        // A closed window with no title or identifier can never be recognised again; forget it.
+        state.windows.removeAll { current[$0.id] == nil && $0.title.isEmpty && $0.accessibilityID.isEmpty }
         if !firstPass { created.forEach(classify) }
         if adoptFocus, let id = focusedID, id != state.focusedWindow || state.focusedCategory != state.record(id)?.category {
             adopt(id, displays: displays)
@@ -351,7 +360,9 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         let live = bindings.map { LiveWindow(id: $0.key, frame: $0.value.frame, minimized: $0.value.minimized) }
         let plan = state.plan(displays: displays, live: live, gap: config.gap)
-        lastShown = Set(plan.filter { !$0.hidden }.map(\.id))
+        lastShown = Set(plan.filter { !$0.hidden && !state.isOverlay($0.id) }.map(\.id))
+        var overlays: Set<UUID> = []
+        let here = workingDisplay(displays)
         lastMinimized = Set(bindings.filter { $0.value.minimized }.keys)
         var retry = false
         do {
@@ -376,6 +387,14 @@ final class Controller: NSObject, NSApplicationDelegate {
                         state.minimizedByManager.remove(placement.id)
                     }
                     state.parkedByManager[placement.id] = nil
+                    if state.isOverlay(placement.id) {
+                        // Floats where you put it. Freshly opened or brought back, it comes up in the
+                        // middle of the screen you're working on.
+                        let onScreen = displays.contains { $0.frame.contains(x: window.frame.midX, y: window.frame.midY) }
+                        if !overlaysShown.contains(placement.id) || !onScreen { centre(window, on: here) }
+                        overlays.insert(placement.id)
+                        continue
+                    }
                     guard let target = placement.frame else { continue }
                     // Fixed-size windows (System Settings, dialogs) can't fill a tile; they stay centred
                     // in their spot, and are put back there if moved.
@@ -409,6 +428,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             lastError = error.localizedDescription
             pause()
         }
+        overlaysShown = overlays
         if retry { schedule(delay: 0.6) }
         installAXObservers()
         refresh()
@@ -449,6 +469,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     // Focus moved to `id`. A window that was offscreen (a link opened from Slack, Cmd-Tab, a new
     // window) comes into the area you were working in; the bar then offers to put that area back.
     func adopt(_ id: UUID, displays: [Display]) {
+        // Overlays float above the work and never take an area over.
+        if state.isOverlay(id) { state.focusedWindow = id; lastOverlay = id; return }
         guard !lastShown.isEmpty, !lastShown.contains(id), !lastMinimized.contains(id),
               let previous = state.focusedWindow, lastShown.contains(previous),
               let frame = bindings[previous].flatMap({ MacDesktop.frame($0.element) }),
@@ -547,12 +569,62 @@ final class Controller: NSObject, NSApplicationDelegate {
     // The screen you're working on: the focused window's, else the one under the pointer.
     var focusedDisplay: Display? {
         let displays = displays()
+        if let id = focusedID, state.isOverlay(id), let frame = bindings[id]?.frame,
+           let display = displays.first(where: { $0.frame.contains(x: frame.midX, y: frame.midY) }) {
+            return display
+        }
         if let id = focusedID, let record = state.record(id), let display = state.screen(of: record.category, displays: displays) {
             return display
         }
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
         return displays.first { display in screen.map { MacDesktop.screen(for: display) == $0 } ?? false } ?? displays.first
+    }
+
+    // The screen you're working on: where the last tiled window you used is, else under the pointer.
+    func workingDisplay(_ displays: [Display]) -> Display {
+        if let id = state.focusedWindow, !state.isOverlay(id), let frame = bindings[id]?.frame,
+           let display = displays.first(where: { $0.frame.contains(x: frame.midX, y: frame.midY) }) {
+            return display
+        }
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+        return displays.first { display in screen.map { MacDesktop.screen(for: display) == $0 } ?? false } ?? displays[0]
+    }
+
+    // An overlay in the middle of `display`, no bigger than most of it.
+    func centre(_ window: MacDesktop.Window, on display: Display) {
+        let area = display.usableFrame
+        let width = min(window.frame.width, area.width * 0.85), height = min(window.frame.height, area.height * 0.85)
+        let target = Frame(x: area.midX - width / 2, y: area.midY - height / 2, width: width, height: height)
+        if width < window.frame.width || height < window.frame.height { try? MacDesktop.setFrame(window, target) }
+        else { MacDesktop.setPosition(window, target) }
+    }
+
+    // Option-O: puts every open overlay away, or brings the last one back over your work. With
+    // none at all, opens a Finder window.
+    func toggleOverlays() {
+        guard enabled else { return }
+        let overlays = bindings.filter { state.isOverlay($0.key) }
+        let open = overlays.filter { !$0.value.minimized }
+        if !open.isEmpty {
+            open.values.forEach { try? MacDesktop.setMinimized($0, true) }
+            schedule(delay: 0.15)
+            return
+        }
+        guard let (id, window) = overlays.first(where: { $0.key == lastOverlay }) ?? overlays.first else {
+            NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads"))
+            return
+        }
+        try? MacDesktop.setMinimized(window, false)
+        lastOverlay = id
+        reconcile()
+        MacDesktop.raise(window)
+        // Coming out of the Dock takes a moment; raise it again once it has landed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, let window = self.bindings[id] else { return }
+            MacDesktop.raise(window)
+        }
     }
 
     func remember() {
@@ -588,6 +660,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func focusCategory(_ category: String) {
         guard enabled, state.category(category) != nil else { return }
+        if state.category(category)?.overlay == true { toggleOverlays(); return }
         remember()
         // A category that's on no monitor comes to the one you're on.
         if state.isUnplaced(category, displays: displays()), let here = focusedDisplay {
@@ -1028,7 +1101,8 @@ final class Controller: NSObject, NSApplicationDelegate {
     // Into an occupied workspace, windows swap; holding Option while dropping makes them share instead.
     func place(_ id: UUID, category: String, workspace: Int) {
         let live = Set(bindings.keys)
-        if NSEvent.modifierFlags.contains(.option) {
+        // Others has no workspaces to swap; the window just floats.
+        if NSEvent.modifierFlags.contains(.option) || state.category(category)?.overlay == true {
             state.move(window: id, to: category)
             state.move(window: id, toWorkspace: workspace, live: live)
         } else {
@@ -1201,7 +1275,7 @@ final class Controller: NSObject, NSApplicationDelegate {
                 // A category on no monitor comes to the one you're on.
                 let category = spareKeys[index - areaKeys.count]
                 focusCategory(category)
-                armChord(category, display: target(for: category)?.id)
+                if state.category(category)?.overlay != true { armChord(category, display: target(for: category)?.id) }
             }
         case 600..<700:
             let index = Int(id - 600)

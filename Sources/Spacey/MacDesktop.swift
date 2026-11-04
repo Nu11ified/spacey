@@ -24,6 +24,22 @@ final class MacDesktop {
         var identifier: String
         var frame: Frame
         var minimized: Bool
+        // A settings window floats in Others whatever the app; a dialog or a window that can't be
+        // zoomed does when no category claims its app.
+        var settings = false
+        var fixedSize = false
+    }
+
+    static let settingsTitles: Set<String> = ["Settings", "Preferences", "Options", "Settings…", "Preferences…"]
+
+    static func isSettings(_ window: AXUIElement, title: String) -> Bool { settingsTitles.contains(title) }
+
+    // Some apps' main windows report themselves as dialogs on macOS 26, so a dialog only counts
+    // when its app is unclaimed, like a window that can't be zoomed.
+    static func isFixedSize(_ window: AXUIElement) -> Bool {
+        if attribute(window, kAXSubroleAttribute) as? String == kAXDialogSubrole { return true }
+        guard let zoom = attribute(window, kAXZoomButtonAttribute), CFGetTypeID(zoom) == AXUIElementGetTypeID() else { return true }
+        return attribute(zoom as! AXUIElement, kAXEnabledAttribute) as? Bool == false
     }
 
     static var trusted: Bool { AXIsProcessTrusted() }
@@ -101,11 +117,12 @@ final class MacDesktop {
                 AXUIElementIsAttributeSettable(window, kAXPositionAttribute as CFString, &positionSettable)
                 AXUIElementIsAttributeSettable(window, kAXSizeAttribute as CFString, &sizeSettable)
                 guard positionSettable.boolValue && sizeSettable.boolValue else { return nil }
-                return Window(element: window, pid: app.processIdentifier, appID: appID,
-                              title: attribute(window, kAXTitleAttribute) as? String ?? "",
+                let title = attribute(window, kAXTitleAttribute) as? String ?? ""
+                return Window(element: window, pid: app.processIdentifier, appID: appID, title: title,
                               identifier: attribute(window, kAXIdentifierAttribute) as? String ?? "",
                               frame: rect,
-                              minimized: attribute(window, kAXMinimizedAttribute) as? Bool ?? false)
+                              minimized: attribute(window, kAXMinimizedAttribute) as? Bool ?? false,
+                              settings: isSettings(window, title: title), fixedSize: isFixedSize(window))
             }
         }
     }

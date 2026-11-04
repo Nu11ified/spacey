@@ -71,10 +71,17 @@ public struct Category: Codable, Equatable, Sendable, Identifiable {
     public var color: String
     // Apps whose new windows open here. Spacey learns these when you move a window.
     public var apps: [String]
+    // Windows here float over whatever you're working on instead of taking a tile: Finder,
+    // settings, small utilities. Minimize one and the work underneath is just as it was.
+    public var floating: Bool?
 
-    public init(id: String, name: String, letter: String, icon: String, color: String, apps: [String] = []) {
+    public init(id: String, name: String, letter: String, icon: String, color: String, apps: [String] = [],
+                floating: Bool? = nil) {
         self.id = id; self.name = name; self.letter = letter; self.icon = icon; self.color = color; self.apps = apps
+        self.floating = floating
     }
+
+    public var overlay: Bool { floating == true }
 }
 
 public struct WindowRecord: Codable, Equatable, Sendable, Identifiable {
@@ -203,13 +210,33 @@ public struct DesktopState: Codable, Equatable, Sendable {
     }
 
     public func record(_ id: UUID) -> WindowRecord? { windows.first { $0.id == id } }
+    public func isOverlay(_ id: UUID) -> Bool { record(id).flatMap { category($0.category) }?.overlay == true }
+    public var others: Category? { categories.first { $0.overlay } }
+
+    // Every desktop has a floating category for Finder, settings and small utilities. The first
+    // time it's added, windows of the apps it claims move into it, out of wherever they landed.
+    public mutating func ensureOthers() {
+        guard others == nil else { return }
+        var others = Category.others
+        let used = Set(categories.compactMap(\.letter.first)).union(Self.reservedLetters)
+        if used.contains("o"), let free = "otxyzuvwpgderi".first(where: { !used.contains($0) }) { others.letter = String(free) }
+        if categories.contains(where: { $0.id == others.id }) { others.id = "others-floating" }
+        for index in categories.indices { categories[index].apps.removeAll { others.apps.contains($0) } }
+        categories.append(others)
+        for index in windows.indices where others.apps.contains(windows[index].appID) {
+            windows[index].category = others.id
+            windows[index].workspace = 1
+            windows[index].together = nil
+        }
+    }
     public func category(_ id: String?) -> Category? { categories.first { $0.id == id } }
     public func workspace(of category: String) -> Int { workspaces[category] ?? 1 }
 
     // The category a new window from this app joins: the one that claims the app, else the one
     // in focus, else the first.
     public func home(for appID: String) -> String {
-        categories.first { $0.apps.contains(appID) }?.id ?? focusedCategory.flatMap { category($0)?.id } ?? categories[0].id
+        categories.first { $0.apps.contains(appID) }?.id
+            ?? focusedCategory.flatMap { category($0) }.flatMap { $0.overlay ? nil : $0.id } ?? categories[0].id
     }
 
     // Each workspace holds one window: a new window takes its category's first empty workspace,
@@ -224,6 +251,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     public mutating func follow(_ window: UUID, displays: [Display], preferred: Display? = nil) {
         guard let record = record(window) else { return }
         focusedWindow = window
+        if isOverlay(window) { return }
         if let showing = hosts(of: record.category, displays: displays)
             .first(where: { workspace(of: record.category, on: $0, displays: displays) == record.workspace }) {
             focus(record.category, on: showing, displays: displays)
@@ -262,6 +290,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // now empty, move to the nearest workspace of the category that still has a window and isn't
     // showing elsewhere. With nothing left, the area simply gives its space away.
     public mutating func fallBack(from category: String, workspace number: Int, visible: Set<UUID>, displays: [Display]) {
+        if self.category(category)?.overlay == true { return }
         let hosts = hosts(of: category, displays: displays)
         let occupied = Set(windows.filter { $0.category == category && visible.contains($0.id) }.map(\.workspace))
         guard !occupied.contains(number) else { return }
@@ -335,7 +364,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // Shows a category on another screen too, keeping it where it already is.
     public mutating func add(_ category: String, to display: Display, displays: [Display]) {
         let key = Self.topologyKey(displays)
-        guard self.category(category) != nil, profiles[key]?.screens[display.id]?.categories.contains(category) == false else { return }
+        guard self.category(category)?.overlay == false, profiles[key]?.screens[display.id]?.categories.contains(category) == false else { return }
         let before = hosts(of: category, displays: displays).map { ($0, workspace(of: category, on: $0, displays: displays)) }
         profiles[key]?.unplaced?.removeAll { $0 == category }
         profiles[key]?.screens[display.id]?.categories.append(category)
@@ -376,6 +405,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // screens, biggest first, and a screen with more than two shows one at a time.
     public mutating func ensureProfile(displays: [Display]) {
         guard !displays.isEmpty else { return }
+        ensureOthers()
         let key = Self.topologyKey(displays)
         let isNew = profiles[key] == nil
         var profile: Profile
@@ -391,12 +421,12 @@ public struct DesktopState: Codable, Equatable, Sendable {
         for display in displays where profile.screens[display.id] == nil {
             profile.screens[display.id] = ScreenSetup(categories: [], split: true)
         }
-        let known = Set(categories.map(\.id))
+        let known = Set(categories.filter { !$0.overlay }.map(\.id))
         for id in profile.screens.keys { profile.screens[id]?.categories.removeAll { !known.contains($0) } }
         profile.unplaced?.removeAll { !known.contains($0) }
         let placed = Set(profile.screens.values.flatMap(\.categories)).union(profile.unplaced ?? [])
         let bySize = displays.sorted { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }
-        for category in categories where !placed.contains(category.id) {
+        for category in categories where !placed.contains(category.id) && !category.overlay {
             let target = bySize.min { (profile.screens[$0.id]?.categories.count ?? 0) < (profile.screens[$1.id]?.categories.count ?? 0) }!
             profile.screens[target.id]?.categories.append(category.id)
         }
@@ -504,7 +534,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
 
     // Focusing a category brings it forward on its screen if that screen takes turns.
     public mutating func focus(_ category: String, on display: Display? = nil, displays: [Display]) {
-        guard self.category(category) != nil else { return }
+        guard self.category(category)?.overlay == false else { return }
         focusedCategory = category
         let hosts = hosts(of: category, displays: displays)
         guard let target = display.flatMap({ d in hosts.first { $0.id == d.id } }) ?? hosts.first else { return }
@@ -573,7 +603,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // the first moves to the next empty workspace of its category.
     public mutating func separate(live: Set<UUID>) {
         var seen: Set<String> = []
-        for index in windows.indices where live.contains(windows[index].id) {
+        for index in windows.indices where live.contains(windows[index].id) && !isOverlay(windows[index].id) {
             let key = "\(windows[index].category)|\(windows[index].workspace)"
             if seen.insert(key).inserted || windows[index].together == true { continue }
             let free = freeWorkspace(in: windows[index].category, live: live)
@@ -585,7 +615,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
     // places it ahead of another category on that screen; otherwise it goes last.
     public mutating func place(_ category: String, on display: Display, before: String? = nil, displays: [Display]) {
         let key = Self.topologyKey(displays)
-        guard var profile = profiles[key], self.category(category) != nil else { return }
+        guard var profile = profiles[key], self.category(category)?.overlay == false else { return }
         for id in profile.screens.keys { profile.screens[id]?.categories.removeAll { $0 == category } }
         profile.unplaced?.removeAll { $0 == category }
         var order = profile.screens[display.id]?.categories ?? []
@@ -627,7 +657,7 @@ public struct DesktopState: Codable, Equatable, Sendable {
 
     // Deletes a category; its windows move to the first remaining one. The last category stays.
     public mutating func removeCategory(_ id: String, displays: [Display]) {
-        guard categories.count > 1, let index = categories.firstIndex(where: { $0.id == id }) else { return }
+        guard categories.count > 1, let index = categories.firstIndex(where: { $0.id == id }), !categories[index].overlay else { return }
         categories.remove(at: index)
         let fallback = categories[0].id
         for i in windows.indices where windows[i].category == id { windows[i].category = fallback }
@@ -700,6 +730,11 @@ public struct DesktopState: Codable, Equatable, Sendable {
             }
         }
         for record in windows where liveByID[record.id] != nil && !shown.contains(record.id) {
+            // Overlays float where they are; only minimizing or closing puts them away.
+            if category(record.category)?.overlay == true {
+                result.append(Placement(id: record.id, frame: nil, hidden: !showable(record)))
+                continue
+            }
             result.append(Placement(id: record.id, frame: nil, hidden: true))
         }
         return result

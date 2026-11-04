@@ -209,7 +209,7 @@ let checks: [(String, () throws -> Void)] = [
         var (state, slack, _, _, _) = deskState()
         state.ensureProfile(displays: [laptop])
         let alone = state.profile(for: [laptop])!
-        try expect(alone.screens["laptop"]?.categories.count == state.categories.count)
+        try expect(alone.screens["laptop"]?.categories.count == state.categories.filter { !$0.overlay }.count)
         try expect(alone.screens["laptop"]?.split == false)
         state.focus("comms", displays: [laptop])
         let plan = state.plan(displays: [laptop], live: live(state))
@@ -260,7 +260,8 @@ let checks: [(String, () throws -> Void)] = [
     ("Category letters avoid the ones Spacey uses", {
         var state = DesktopState()
         let added = state.addCategory(named: "Focus")
-        try expect(added?.letter == "o")
+        // F is taken by Focus mode and O by Others.
+        try expect(added?.letter == "c" || added?.letter == "u")
         try expect(state.addCategory(named: "Focus") == nil)
     }),
     ("Focus shows only the focused window, full screen", {
@@ -310,7 +311,7 @@ extension Optional {
     }
 }
 
-let all = checks + navigationChecks() + rexChecks() + parkingChecks() + profileChecks()
+let all = checks + navigationChecks() + rexChecks() + parkingChecks() + profileChecks() + othersChecks()
 var failures = 0
 for (name, run) in all {
     do { try run(); print("PASS \(name)") }

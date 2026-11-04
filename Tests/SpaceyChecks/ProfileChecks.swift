@@ -47,3 +47,33 @@ func profileChecks() -> [(String, () throws -> Void)] { [
         try expect(state.profile(for: desk) == nil)
     }),
 ] }
+
+func othersChecks() -> [(String, () throws -> Void)] { [
+    ("Finder and settings float over the work instead of taking it over", {
+        var (state, slack, _, zen2, _) = deskState()
+        state.select(workspace: 2, in: "browser", displays: desk)
+        // An older desktop without Others: Finder had landed in Browser 5.
+        state.categories.removeAll { $0.overlay }
+        let finder = WindowRecord(appID: "com.apple.finder", title: "Downloads", category: "browser", workspace: 5)
+        state.windows.append(finder)
+        state.ensureProfile(displays: desk)
+        try expect(state.record(finder.id)?.category == "others")
+        try expect(state.profile(for: desk)?.screens.values.allSatisfy { !$0.categories.contains("others") } == true)
+        state.follow(finder.id, displays: desk)
+        let plan = state.plan(displays: desk, live: live(state))
+        // Shown, left where it is, and the areas under it unchanged.
+        try expect(!hidden(finder.id, plan) && frame(finder.id, plan) == nil)
+        try expect(frame(slack, plan) != nil && frame(zen2, plan) != nil)
+        try expect(state.focusedCategory != "others")
+        // Minimized, it's simply put away.
+        let away = state.plan(displays: desk, live: live(state, minimized: [finder.id]))
+        try expect(hidden(finder.id, away) && frame(zen2, away) != nil)
+    }),
+    ("New windows of unknown apps never join Others by accident", {
+        var (state, _, _, _, _) = deskState()
+        state.ensureProfile(displays: desk)
+        state.focusedCategory = "others"
+        try expect(state.home(for: "com.example.unknown") != "others")
+        try expect(state.home(for: "com.apple.finder") == "others")
+    }),
+] }

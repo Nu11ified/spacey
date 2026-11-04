@@ -18,7 +18,19 @@ extension Category {
                  apps: ["com.apple.Notes", "notion.id", "md.obsidian", "net.shinyfrog.bear"]),
         Category(id: "media", name: "Media", letter: "m", icon: "music.note", color: "#FF5C8A",
                  apps: ["com.apple.Music", "com.spotify.client", "com.apple.TV"]),
+        others,
     ]
+
+    // Floats over your work: file browsing, settings, and small tools you open and put away.
+    public static let others = Category(
+        id: "others", name: "Others", letter: "o", icon: "square.on.square", color: "#8E8E93",
+        apps: ["com.apple.finder", "com.apple.systempreferences", "io.tailscale.ipn.macos", "io.tailscale.ipn.macsys",
+               "com.apple.ActivityMonitor", "com.apple.calculator", "com.apple.archiveutility", "com.apple.DiskUtility",
+               "com.apple.keychainaccess", "com.apple.ScreenSharing", "com.apple.FontBook", "com.apple.Passwords",
+               "com.1password.1password", "com.bitwarden.desktop", "com.apple.AppStore", "com.apple.Console",
+               "com.apple.Digital-Color-Meter", "com.apple.print.PrinterProxy", "com.apple.BluetoothFileExchange",
+               "com.raycast.macos", "com.surteesstudios.Bartender", "com.apple.Image_Capture", "com.apple.findmy"],
+        floating: true)
 }
 
 // ~/.config/spacey/config.json. Every field is optional.
